@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+data-e2e/
+data-demo/
+data-clipboard/
+.env
+.test*
+scripts/screenshot-*.png
+scripts/debug-paste.png
