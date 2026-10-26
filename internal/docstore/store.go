@@ -30,13 +30,16 @@ const (
 	// synchronously on every edit, so this only affects list metadata.
 	MetaDebounce = 800 * time.Millisecond
 
-	// VersionInterval is the snapshot cadence while a document is being
-	// edited. Short enough to keep the state between two users' edits
-	// (A types, B deletes) instead of only the final result.
-	VersionInterval = 2 * time.Second
+	// VersionDebounce is how long after the last edit a snapshot is taken.
+	// One version per editing burst, not one per keystroke.
+	VersionDebounce = 2 * time.Second
+
+	// VersionMaxInterval forces a snapshot during continuous typing that
+	// never pauses long enough to hit the debounce.
+	VersionMaxInterval = 15 * time.Second
 
 	// KeepVersions is how many snapshots are retained per document.
-	KeepVersions = 100
+	KeepVersions = 50
 
 	defaultTitle  = "未命名文档"
 	maxTitleRunes = 120
@@ -100,8 +103,9 @@ type cachedDoc struct {
 	dirty  bool
 	timer  *time.Timer
 
-	versionDirty bool
-	versionTimer *time.Timer
+	versionDirty      bool
+	versionDirtySince time.Time
+	versionTimer      *time.Timer
 }
 
 // Open opens (or creates) the database and applies the schema.
@@ -665,9 +669,20 @@ func (s *Store) StoreUpdate(ctx context.Context, docName string, update []byte) 
 		cc.timer = time.AfterFunc(MetaDebounce, func() { s.flushMeta(docName) })
 	}
 	cc.versionDirty = true
-	if cc.versionTimer == nil {
-		cc.versionTimer = time.AfterFunc(VersionInterval, func() { s.flushVersion(docName) })
+	now := time.Now()
+	if cc.versionDirtySince.IsZero() {
+		cc.versionDirtySince = now
 	}
+	delay := VersionDebounce
+	if now.Sub(cc.versionDirtySince) >= VersionMaxInterval {
+		// Continuous typing: force a checkpoint instead of postponing
+		// forever.
+		delay = 0
+	}
+	if cc.versionTimer != nil {
+		cc.versionTimer.Stop()
+	}
+	cc.versionTimer = time.AfterFunc(delay, func() { s.flushVersion(docName) })
 	cc.mu.Unlock()
 
 	_, err = s.db.ExecContext(ctx,
@@ -973,9 +988,10 @@ func (s *Store) flushMeta(docName string) {
 	cc.mu.Unlock()
 }
 
-// flushVersion writes a snapshot when the editing cadence timer fires.
-// While edits keep arriving it re-arms, so a burst of typing produces one
-// snapshot every VersionInterval instead of only at the end.
+// flushVersion writes a snapshot after an editing burst pauses. Edits
+// arriving during the write mark the document dirty again and schedule
+// another debounce; continuous typing is checkpointed by
+// VersionMaxInterval in StoreUpdate.
 func (s *Store) flushVersion(docName string) {
 	s.mu.Lock()
 	closed := s.closed
@@ -995,6 +1011,7 @@ func (s *Store) flushVersion(docName string) {
 	title := CleanTitle(ygo.NewText(cc.doc, "title").String())
 	digest := documentDigest(cc.doc)
 	cc.versionDirty = false
+	cc.versionDirtySince = time.Time{}
 	cc.versionTimer = nil
 	cc.mu.Unlock()
 
@@ -1005,11 +1022,12 @@ func (s *Store) flushVersion(docName string) {
 
 	cc.mu.Lock()
 	if insertErr != nil {
-		// Retry on the next tick instead of silently dropping the snapshot.
+		// Retry after the next debounce instead of silently dropping it.
 		cc.versionDirty = true
+		cc.versionDirtySince = time.Now()
 	}
 	if cc.versionDirty && cc.versionTimer == nil && !closed {
-		cc.versionTimer = time.AfterFunc(VersionInterval, func() { s.flushVersion(docName) })
+		cc.versionTimer = time.AfterFunc(VersionDebounce, func() { s.flushVersion(docName) })
 	}
 	cc.mu.Unlock()
 }
