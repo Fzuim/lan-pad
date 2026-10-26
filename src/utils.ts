@@ -32,7 +32,8 @@ export function sanitizeName(value: string): string {
 
 export function formatRelative(timestamp: number): string {
   const diff = Math.max(0, Date.now() - timestamp)
-  if (diff < 30_000) return '刚刚'
+  if (diff < 10_000) return '刚刚'
+  if (diff < 60_000) return `${Math.floor(diff / 1000)} 秒前`
   if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)} 分钟前`
   if (diff < 24 * 60 * 60_000) return `${Math.floor(diff / 3_600_000)} 小时前`
   return new Date(timestamp).toLocaleDateString('zh-CN', {

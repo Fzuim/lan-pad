@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,9 +70,11 @@ func TestStoreUpdateRefreshesMetadataAndFlushCompacts(t *testing.T) {
 	ctx := context.Background()
 	for _, value := range []string{"第一段", "第二段"} {
 		peer := ygo.NewDoc()
-		text := ygo.NewText(peer, "body")
+		content := ygo.NewXmlFragment(peer, "content")
 		txn := peer.WriteTxn()
-		if err := text.Insert(txn, uint64(text.Length()), value); err != nil {
+		paragraph := content.InsertXmlElement(txn, 0, "paragraph")
+		node := paragraph.InsertXmlText(txn, 0)
+		if err := node.Insert(txn, 0, value); err != nil {
 			t.Fatal(err)
 		}
 		txn.Commit()
@@ -118,8 +121,9 @@ func TestStoreUpdateRefreshesMetadataAndFlushCompacts(t *testing.T) {
 	if err := ygo.ApplyUpdate(doc, updates[0]); err != nil {
 		t.Fatal(err)
 	}
-	if got := ygo.NewText(doc, "body").String(); got != "第一段第二段" {
-		t.Fatalf("body = %q", got)
+	if got := ygo.NewXmlFragment(doc, "content").ToString(); !strings.Contains(got, "第一段") ||
+		!strings.Contains(got, "第二段") {
+		t.Fatalf("content = %q", got)
 	}
 }
 
@@ -230,9 +234,11 @@ func TestVersionsCaptureAndDeduplicate(t *testing.T) {
 	}
 
 	peer := ygo.NewDoc()
-	body := ygo.NewText(peer, "body")
+	content := ygo.NewXmlFragment(peer, "content")
 	txn := peer.WriteTxn()
-	if err := body.Insert(txn, 0, "新增内容"); err != nil {
+	paragraph := content.InsertXmlElement(txn, 0, "paragraph")
+	textNode := paragraph.InsertXmlText(txn, 0)
+	if err := textNode.Insert(txn, 0, "新增内容"); err != nil {
 		t.Fatal(err)
 	}
 	txn.Commit()
@@ -284,6 +290,77 @@ func TestVersionsOfUnknownVersion(t *testing.T) {
 	}
 	if detail != nil {
 		t.Fatalf("detail = %+v", detail)
+	}
+}
+
+func TestFlushVersionDeduplicatesByVisibleContent(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	meta, err := store.CreateDoc("abcdefghijkl", "去重")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addParagraph := func(text string) []byte {
+		t.Helper()
+		peer := ygo.NewDoc()
+		content := ygo.NewXmlFragment(peer, "content")
+		txn := peer.WriteTxn()
+		paragraph := content.InsertXmlElement(txn, 0, "paragraph")
+		node := paragraph.InsertXmlText(txn, 0)
+		if err := node.Insert(txn, 0, text); err != nil {
+			t.Fatal(err)
+		}
+		txn.Commit()
+		return ygo.EncodeStateAsUpdate(peer)
+	}
+
+	if err := store.StoreUpdate(ctx, meta.ID, addParagraph("同一段文字")); err != nil {
+		t.Fatal(err)
+	}
+	store.flushVersion(meta.ID)
+
+	versions, err := store.ListVersions(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d, want 2", len(versions))
+	}
+
+	// Re-flushing without edits must not create another version.
+	store.flushVersion(meta.ID)
+	versions, err = store.ListVersions(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("unchanged content created %d versions, want 2", len(versions))
+	}
+}
+
+func TestDocumentDigestIgnoresClientID(t *testing.T) {
+	build := func() *ygo.Doc {
+		t.Helper()
+		doc := ygo.NewDoc()
+		content := ygo.NewXmlFragment(doc, "content")
+		txn := doc.WriteTxn()
+		paragraph := content.InsertXmlElement(txn, 0, "paragraph")
+		node := paragraph.InsertXmlText(txn, 0)
+		if err := node.Insert(txn, 0, "同一段文字"); err != nil {
+			t.Fatal(err)
+		}
+		txn.Commit()
+		return doc
+	}
+
+	first := build()
+	second := build()
+	if first.ClientID() == second.ClientID() {
+		t.Fatal("test documents unexpectedly share a client id")
+	}
+	if documentDigest(first) != documentDigest(second) {
+		t.Fatalf("digests differ: %s != %s", documentDigest(first), documentDigest(second))
 	}
 }
 

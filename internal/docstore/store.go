@@ -30,12 +30,13 @@ const (
 	// synchronously on every edit, so this only affects list metadata.
 	MetaDebounce = 800 * time.Millisecond
 
-	// VersionInterval is how often an actively edited document is
-	// snapshotted into the versions table.
-	VersionInterval = time.Minute
+	// VersionInterval is the snapshot cadence while a document is being
+	// edited. Short enough to keep the state between two users' edits
+	// (A types, B deletes) instead of only the final result.
+	VersionInterval = 2 * time.Second
 
 	// KeepVersions is how many snapshots are retained per document.
-	KeepVersions = 50
+	KeepVersions = 100
 
 	defaultTitle  = "未命名文档"
 	maxTitleRunes = 120
@@ -98,6 +99,9 @@ type cachedDoc struct {
 	loaded bool
 	dirty  bool
 	timer  *time.Timer
+
+	versionDirty bool
+	versionTimer *time.Timer
 }
 
 // Open opens (or creates) the database and applies the schema.
@@ -219,7 +223,7 @@ func (s *Store) backfillVersionHashes() error {
 			rows.Close()
 			return err
 		}
-		updates = append(updates, pending{id: id, sha: stateSHA(state)})
+		updates = append(updates, pending{id: id, sha: digestFromState(state)})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -284,6 +288,7 @@ func (s *Store) CreateDoc(id, title string) (DocMeta, error) {
 	}
 	txn.Commit()
 	state := ygo.EncodeStateAsUpdate(doc)
+	digest := documentDigest(doc)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -307,7 +312,7 @@ func (s *Store) CreateDoc(id, title string) (DocMeta, error) {
 	// Keep the blank document as the first history entry.
 	if _, err := tx.Exec(
 		`INSERT INTO versions (doc_id, state, title, sha256, created_at) VALUES (?, ?, ?, ?, ?)`,
-		id, state, clean, stateSHA(state), now,
+		id, state, clean, digest, now,
 	); err != nil {
 		return DocMeta{}, err
 	}
@@ -474,27 +479,16 @@ func (s *Store) SnapshotNow(ctx context.Context, docID string) (*Version, error)
 	cc.mu.Lock()
 	state := ygo.EncodeStateAsUpdate(cc.doc)
 	title := CleanTitle(ygo.NewText(cc.doc, "title").String())
+	digest := documentDigest(cc.doc)
 	cc.mu.Unlock()
 
-	return s.insertVersion(docID, state, title, time.Now().UnixMilli(), true)
+	return s.insertVersion(docID, state, title, digest, time.Now().UnixMilli())
 }
 
-func (s *Store) insertVersion(docID string, state []byte, title string, now int64, force bool) (*Version, error) {
+func (s *Store) insertVersion(docID string, state []byte, title, digest string, now int64) (*Version, error) {
 	s.versionMu.Lock()
 	defer s.versionMu.Unlock()
 
-	if !force {
-		var lastVersionAt int64
-		err := s.db.QueryRow(`SELECT last_version_at FROM docs WHERE id = ?`, docID).Scan(&lastVersionAt)
-		if err != nil {
-			return nil, err
-		}
-		if now-lastVersionAt < VersionInterval.Milliseconds() {
-			return nil, nil
-		}
-	}
-
-	sha := stateSHA(state)
 	var latest string
 	err := s.db.QueryRow(
 		`SELECT COALESCE(sha256, '') FROM versions
@@ -506,7 +500,7 @@ func (s *Store) insertVersion(docID string, state []byte, title string, now int6
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if latest == sha {
+	if latest == digest {
 		return nil, nil
 	}
 
@@ -519,7 +513,7 @@ func (s *Store) insertVersion(docID string, state []byte, title string, now int6
 
 	result, err := tx.Exec(
 		`INSERT INTO versions (doc_id, state, title, sha256, created_at) VALUES (?, ?, ?, ?, ?)`,
-		docID, state, title, sha, now,
+		docID, state, title, digest, now,
 	)
 	if err != nil {
 		return nil, err
@@ -550,8 +544,30 @@ func (s *Store) insertVersion(docID string, state []byte, title string, now int6
 		CreatedAt: now,
 		Title:     title,
 		Size:      int64(len(state)),
-		SHA256:    sha,
+		SHA256:    digest,
 	}, nil
+}
+
+// documentDigest hashes the visible document (title + Tiptap XML content,
+// including formatting attributes) rather than the raw CRDT bytes. Two
+// states that produce the same visible document therefore dedupe, while a
+// real edit always produces a new digest.
+func documentDigest(doc *ygo.Doc) string {
+	title := ygo.NewText(doc, "title").String()
+	content := ygo.NewXmlFragment(doc, "content").ToString()
+	if content == "" {
+		content = ygo.NewXmlFragment(doc, "default").ToString()
+	}
+	sum := sha256.Sum256([]byte(title + "\x00" + content))
+	return hex.EncodeToString(sum[:])
+}
+
+func digestFromState(state []byte) string {
+	doc := ygo.NewDoc()
+	if err := ygo.ApplyUpdate(doc, state); err != nil {
+		return stateSHA(state)
+	}
+	return documentDigest(doc)
 }
 
 func stateSHA(state []byte) string {
@@ -647,6 +663,10 @@ func (s *Store) StoreUpdate(ctx context.Context, docName string, update []byte) 
 	cc.dirty = true
 	if cc.timer == nil {
 		cc.timer = time.AfterFunc(MetaDebounce, func() { s.flushMeta(docName) })
+	}
+	cc.versionDirty = true
+	if cc.versionTimer == nil {
+		cc.versionTimer = time.AfterFunc(VersionInterval, func() { s.flushVersion(docName) })
 	}
 	cc.mu.Unlock()
 
@@ -836,12 +856,17 @@ func (s *Store) Close() error {
 
 	for name := range caches {
 		s.flushMeta(name)
+		s.flushVersion(name)
 	}
 	for _, cc := range caches {
 		cc.mu.Lock()
 		if cc.timer != nil {
 			cc.timer.Stop()
 			cc.timer = nil
+		}
+		if cc.versionTimer != nil {
+			cc.versionTimer.Stop()
+			cc.versionTimer = nil
 		}
 		cc.mu.Unlock()
 	}
@@ -939,8 +964,6 @@ func (s *Store) flushMeta(docName string) {
 		if !closed {
 			fmt.Fprintf(os.Stderr, "[db] 保存文档元数据失败 %s: %v\n", docName, err)
 		}
-	} else {
-		s.maybeVersion(docName, state, title, now)
 	}
 
 	cc.mu.Lock()
@@ -950,9 +973,57 @@ func (s *Store) flushMeta(docName string) {
 	cc.mu.Unlock()
 }
 
-func (s *Store) maybeVersion(docID string, state []byte, title string, now int64) {
-	if _, err := s.insertVersion(docID, state, title, now, false); err != nil {
-		fmt.Fprintf(os.Stderr, "[db] 保存文档版本失败 %s: %v\n", docID, err)
+// flushVersion writes a snapshot when the editing cadence timer fires.
+// While edits keep arriving it re-arms, so a burst of typing produces one
+// snapshot every VersionInterval instead of only at the end.
+func (s *Store) flushVersion(docName string) {
+	s.mu.Lock()
+	closed := s.closed
+	cc := s.cache[docName]
+	s.mu.Unlock()
+	if cc == nil {
+		return
+	}
+
+	cc.mu.Lock()
+	if !cc.versionDirty || cc.doc == nil {
+		cc.versionTimer = nil
+		cc.mu.Unlock()
+		return
+	}
+	state := ygo.EncodeStateAsUpdate(cc.doc)
+	title := CleanTitle(ygo.NewText(cc.doc, "title").String())
+	digest := documentDigest(cc.doc)
+	cc.versionDirty = false
+	cc.versionTimer = nil
+	cc.mu.Unlock()
+
+	_, insertErr := s.insertVersion(docName, state, title, digest, time.Now().UnixMilli())
+	if insertErr != nil && !closed {
+		fmt.Fprintf(os.Stderr, "[db] 保存文档版本失败 %s: %v\n", docName, insertErr)
+	}
+
+	cc.mu.Lock()
+	if insertErr != nil {
+		// Retry on the next tick instead of silently dropping the snapshot.
+		cc.versionDirty = true
+	}
+	if cc.versionDirty && cc.versionTimer == nil && !closed {
+		cc.versionTimer = time.AfterFunc(VersionInterval, func() { s.flushVersion(docName) })
+	}
+	cc.mu.Unlock()
+}
+
+// FlushVersions snapshots every document with unsaved version changes.
+func (s *Store) FlushVersions() {
+	s.mu.Lock()
+	names := make([]string, 0, len(s.cache))
+	for name := range s.cache {
+		names = append(names, name)
+	}
+	s.mu.Unlock()
+	for _, name := range names {
+		s.flushVersion(name)
 	}
 }
 

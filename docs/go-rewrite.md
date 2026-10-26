@@ -119,7 +119,8 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 - 新增 `doc_updates` 表，作为 ygo 的 append-only update log；启动时会把只有
   `docs.state` 的旧文档自动补一条 log；
 - `versions` 增加了 `sha256` 列；旧数据库启动时自动补列并回填哈希。快照策略：新建文档时存一份，
-  编辑过程中每分钟最多一份，最后一个人离开时再存一份；内容没变会按 SHA-256 去重，每个文档最多保留 50 份；
+  编辑过程中每 2 秒最多一份（短会话也至少会在最后一个人离开时存一份）；哈希按“标题 + 正文/格式”计算，
+  内容没变不会重复记录，每个文档最多保留 100 份；
 - `assets`、`settings`、`host-key.txt` 不变。
 
 单次编辑先同步写 log（掉电不丢），标题/`updated_at`/`docs.state` 由 800ms 防抖的
@@ -155,7 +156,9 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 
 文档页标题栏的“历史”按钮会打开版本面板：
 
-- 按时间倒序显示快照卡片（相对时间、内容哈希、state 大小）；
+- 按时间倒序显示快照卡片（相对时间、内容哈希、state 大小）；编辑期间每 2 秒采样一次，
+  所以“A 输入 123456、B 紧接着删掉 6”会留下 123456 和 12345 两个可对比版本，而不是只剩最终结果；
+- 内容哈希按“标题 + ProseMirror XML（含格式属性）”计算，仅 CRDT 元数据不同、可见内容相同的状态不会重复记录；
 - 选中快照后，把它的 Yjs state 解码成 ProseMirror JSON，再转成纯文本与当前正文做行级 LCS diff：
   红色 `-` 是恢复会删掉的行，绿色 `+` 是当前独有的行；
 - 可把某个版本下载成 Markdown 文本；
@@ -204,6 +207,7 @@ BASE_URL=http://127.0.0.1:8787 node scripts/test-browser.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-ui.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-online.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
+BASE_URL=http://127.0.0.1:8787 node scripts/test-version-cadence.mjs
 ```
 
 已实测通过：中文标题/正文、代码块、图片上传与同步、灯箱、在线人数、断线重连、

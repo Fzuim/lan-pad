@@ -193,9 +193,11 @@ func TestVersionAPI(t *testing.T) {
 	}
 
 	peer := ygo.NewDoc()
-	text := ygo.NewText(peer, "body")
+	content := ygo.NewXmlFragment(peer, "content")
 	txn := peer.WriteTxn()
-	if err := text.Insert(txn, 0, "新的正文"); err != nil {
+	paragraph := content.InsertXmlElement(txn, 0, "paragraph")
+	textNode := paragraph.InsertXmlText(txn, 0)
+	if err := textNode.Insert(txn, 0, "新的正文"); err != nil {
 		t.Fatal(err)
 	}
 	txn.Commit()
