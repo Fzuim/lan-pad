@@ -1,9 +1,26 @@
-import 'dotenv/config'
+import dotenv from 'dotenv'
 import path from 'node:path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
+import { isSeaRuntime } from './sea.js'
 
-export const ROOT = process.cwd()
+/**
+ * 单文件 exe 运行时以 exe 所在目录为根目录，避免“从哪里双击”影响数据位置。
+ * 源码/dev 运行时仍然是当前工作目录。
+ */
+export const PACKAGED = isSeaRuntime()
+export const ROOT = PACKAGED ? path.dirname(process.execPath) : process.cwd()
+
+if (PACKAGED) {
+  try {
+    process.chdir(ROOT)
+  } catch {
+    // 只影响相对路径，失败不致命
+  }
+}
+
+dotenv.config({ path: path.join(ROOT, '.env'), quiet: true })
+
 export const PORT = Number(process.env.PORT || 8787)
 export const HOST = process.env.HOST || '0.0.0.0'
 export const DATA_DIR = path.resolve(ROOT, process.env.DATA_DIR || 'data')

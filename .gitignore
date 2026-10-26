@@ -1,9 +1,14 @@
 node_modules/
 dist/
+release/
+.build/
+.npm-cache/
 data/
 data-e2e/
 data-demo/
 data-clipboard/
+data-go/
+data-delete/
 .env
 .test*
 scripts/screenshot-*.png

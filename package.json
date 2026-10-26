@@ -8,7 +8,8 @@
     "dev": "concurrently -k \"vite\" \"tsx watch server/index.ts\"",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "build:exe": "node scripts/build-exe.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -43,7 +44,9 @@
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
+    "esbuild": "^0.28.2",
     "playwright-core": "^1.64.1",
+    "postject": "^1.0.0-alpha.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",

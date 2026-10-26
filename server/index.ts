@@ -4,13 +4,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crossws from 'crossws/adapters/node'
 import multer from 'multer'
-import { CLIENT_DIR, HOST, HOST_KEY, PORT } from './config.js'
+import { CLIENT_DIR, HOST, HOST_KEY, PACKAGED, PORT } from './config.js'
 import { closeDb, createDoc, getAssetByFilename, getDocMeta, listDocs, softDeleteDoc } from './db.js'
 import { getOnlineCount, hocuspocus, closeDocConnections } from './collab.js'
 import { getNetworkInfo } from './network.js'
 import { isAssetFile, isDocId, makeDocId } from './ids.js'
 import { saveAsset, upload } from './assets.js'
 import { ASSETS_DIR } from './config.js'
+import { isSeaRuntime, readClientAsset } from './sea.js'
+import { openBrowser } from './open.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -134,7 +136,21 @@ app.use('/assets', (_req, res) => {
   fail(res, 404, 'NOT_FOUND', '图片不存在')
 })
 
-if (fs.existsSync(CLIENT_DIR)) {
+if (isSeaRuntime()) {
+  // 单文件 exe：前端静态文件在构建时注入进 exe，没有 dist/client 目录。
+  app.use((req, res, next) => {
+    if (req.method !== 'GET') return next()
+    if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) return next()
+
+    const asset = readClientAsset(req.path) ?? (path.extname(req.path) ? null : readClientAsset('/'))
+    if (!asset) return next()
+
+    const isHtml = asset.type.startsWith('text/html')
+    res.setHeader('Content-Type', asset.type)
+    res.setHeader('Cache-Control', isHtml ? 'no-cache' : 'public, max-age=31536000, immutable')
+    res.end(asset.body)
+  })
+} else if (fs.existsSync(CLIENT_DIR)) {
   app.use(express.static(CLIENT_DIR, { index: false, maxAge: '1h' }))
   app.use((req, res, next) => {
     if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/assets/')) {
@@ -205,6 +221,21 @@ server.on('upgrade', (request, socket, head) => {
   })
 })
 
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`\n  端口 ${PORT} 已被占用。可能是 LAN Pad 已经在运行，或改用 PORT=xxxx 启动。\n`)
+  } else {
+    console.error(error)
+  }
+  if (PACKAGED) {
+    console.error('  按回车键退出...')
+    process.stdin.resume()
+    process.stdin.once('data', () => process.exit(1))
+    return
+  }
+  process.exit(1)
+})
+
 server.listen(PORT, HOST, async () => {
   const network = await getNetworkInfo()
   console.log('')
@@ -221,6 +252,9 @@ server.listen(PORT, HOST, async () => {
   console.log(`  主机密钥: ${HOST_KEY}`)
   console.log('  （删除文档等主机操作才需要，队友不用）')
   console.log('')
+  if (PACKAGED && process.env.LANPAD_OPEN !== '0') {
+    openBrowser(`http://localhost:${PORT}`)
+  }
 })
 
 let shuttingDown = false
