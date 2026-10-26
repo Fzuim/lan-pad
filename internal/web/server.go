@@ -3,10 +3,12 @@
 package web
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"mime"
 	"net/http"
@@ -29,16 +31,24 @@ type Server struct {
 	cfg       *config.Config
 	store     *docstore.Store
 	collab    *collab.Manager
+	clientFS  fs.FS
 	startedAt time.Time
 	handler   http.Handler
 }
 
 // New builds the router.
 func New(cfg *config.Config, store *docstore.Store, manager *collab.Manager) *Server {
+	clientFS := embeddedClientFS()
+	if clientFS == nil {
+		// Development / `go run` mode: serve the Vite build from disk.
+		clientFS = os.DirFS(cfg.ClientDir)
+	}
+
 	s := &Server{
 		cfg:       cfg,
 		store:     store,
 		collab:    manager,
+		clientFS:  clientFS,
 		startedAt: time.Now(),
 	}
 
@@ -321,8 +331,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	index := filepath.Join(s.cfg.ClientDir, "index.html")
-	if _, err := os.Stat(index); err != nil {
+	if _, err := fs.Stat(s.clientFS, "index.html"); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "CLIENT_NOT_BUILT",
 			"前端还没构建：请先运行 npm run build（或只运行 vite build）")
 		return
@@ -331,29 +340,33 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	clean := path.Clean("/" + r.URL.Path)
 	rel := strings.TrimPrefix(clean, "/")
 	if rel == "" || rel == "." {
-		s.serveClientFile(w, r, index, true)
+		s.serveClientFile(w, r, "index.html", true)
 		return
 	}
-
-	full := filepath.Join(s.cfg.ClientDir, filepath.FromSlash(rel))
-	if !within(s.cfg.ClientDir, full) {
+	if !fs.ValidPath(rel) {
 		http.NotFound(w, r)
 		return
 	}
-	if info, err := os.Stat(full); err == nil && !info.IsDir() {
-		s.serveClientFile(w, r, full, false)
+	if info, err := fs.Stat(s.clientFS, rel); err == nil && !info.IsDir() {
+		s.serveClientFile(w, r, rel, false)
 		return
 	}
 	// Unknown path without an extension: let the SPA router handle it.
 	if path.Ext(rel) == "" {
-		s.serveClientFile(w, r, index, true)
+		s.serveClientFile(w, r, "index.html", true)
 		return
 	}
 	http.NotFound(w, r)
 }
 
-func (s *Server) serveClientFile(w http.ResponseWriter, r *http.Request, file string, isIndex bool) {
-	ext := strings.ToLower(filepath.Ext(file))
+func (s *Server) serveClientFile(w http.ResponseWriter, r *http.Request, name string, isIndex bool) {
+	data, err := fs.ReadFile(s.clientFS, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	ext := strings.ToLower(path.Ext(name))
 	if isIndex {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -361,21 +374,13 @@ func (s *Server) serveClientFile(w http.ResponseWriter, r *http.Request, file st
 		if contentType := mime.TypeByExtension(ext); contentType != "" {
 			w.Header().Set("Content-Type", contentType)
 		}
-		if strings.HasPrefix(filepath.ToSlash(file), filepath.ToSlash(filepath.Join(s.cfg.ClientDir, "static"))+"/") {
+		if strings.HasPrefix(name, "static/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "public, max-age=3600")
 		}
 	}
-	http.ServeFile(w, r, file)
-}
-
-func within(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
 }
 
 // ---------------------------------------------------------------------------

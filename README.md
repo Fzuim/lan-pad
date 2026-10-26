@@ -24,13 +24,16 @@
 后端已经翻写为纯 Go（[ygo](https://github.com/Deln0r/ygo) + modernc SQLite），前端保留 React + Tiptap：
 
 ```bash
-npx vite build           # 构建前端
-go run ./cmd/lanpad      # 启动 Go 服务
-# 或者
-npm run go:build && ./release/lanpad.exe
+npm run build            # 构建前端
+go run ./cmd/lanpad      # 启动 Go 服务（从 dist/client 读前端）
+
+# 或者编译单文件 exe（前端已内嵌）
+npm run go:build         # 生成 release/LANPad.exe（约 12 MB）
+./release/LANPad.exe
 ```
 
-- 运行时不需要 Node；数据格式与 Node 版兼容，可以直接打开旧的 `data/lanpad.db`
+- 运行时不需要 Node；单文件 exe 也不需要 `dist/client`，双击即可启动
+- 数据格式与 Node 版兼容，可以直接打开旧的 `data/lanpad.db`
 - 实时协议由 Hocuspocus 换成 y-websocket，前端已适配；`?mode=view` 改为服务端强制只读
 - 详细的模块对照、差异与待办见 [docs/go-rewrite.md](docs/go-rewrite.md)
 
@@ -69,7 +72,8 @@ npm start        # go run ./cmd/lanpad
 ### 单文件 exe（旧 Node 方案，保留作参考）
 
 `scripts/build-exe.mjs` 里的 Node SEA 打包是翻写前的方案，现已由 Go 后端取代；
-Go 版本的构建命令是 `npm run go:build`，产物在 `release/lanpad.exe`。下面是旧方案的说明。
+Go 版本的构建命令是 `npm run go:build`，产物是内嵌前端的单文件 `release/LANPad.exe`。
+下面是旧 Node 方案的说明。
 
 ```bash
 npm run build:exe
@@ -270,7 +274,7 @@ src/
   components/    首页、文档页、工具栏、名字/分享弹窗
   api.ts         前端 API
   styles.css     全部样式
-scripts/         同步/浏览器测试、build-exe.mjs（单文件打包）
+scripts/         同步/浏览器测试、build-go.mjs（Go 单文件打包）、build-exe.mjs（旧 Node 打包）
 design.md        设计方案
 ```
 

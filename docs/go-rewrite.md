@@ -44,9 +44,11 @@ internal/web/                 REST API、图片、静态前端、安全响应头
 internal/ids/                 文档 ID / 图片文件名校验
 internal/openbrowser/         跨平台打开浏览器
 scripts/test-go-sync.mjs      Go 服务端的双客户端同步/重连/只读测试
+scripts/build-go.mjs          内嵌前端并编译单文件二进制
 ```
 
-前端仍是 `src/`，构建产物仍是 `dist/client/`，由 Go 服务直接托管。
+前端仍是 `src/`，构建产物是 `dist/client/`。开发时 Go 从磁盘读取；打包时
+`scripts/build-go.mjs` 会把它复制到 `internal/web/dist` 并用 `go:embed` 打进二进制。
 
 ---
 
@@ -57,18 +59,30 @@ scripts/test-go-sync.mjs      Go 服务端的双客户端同步/重连/只读测
 npm install
 npm run build
 
-# 2. 启动 Go 后端（npm start 已指向 Go）
+# 2. 直接跑 Go 后端（从 dist/client 读前端）
 npm start            # 等价于 go run ./cmd/lanpad
 
-# 或者编译后再运行
-npm run go:build     # release/lanpad.exe
-./release/lanpad.exe
+# 3. 或者编译单文件 exe（内嵌前端，不需要 dist/client）
+npm run go:build     # release/LANPad.exe
+./release/LANPad.exe
 ```
 
 默认地址 <http://localhost:8787>，与 Node 版本一致。数据仍在 `./data/`。
 
 `npm run dev` 现在同时启动 Vite 和 Go（`concurrently`）；旧的 `server/` Node 实现只作参考，
 `npm run build:exe` 保留为旧 SEA 打包脚本。
+
+### 单文件构建
+
+`npm run go:build` 会：
+
+1. 检查 `dist/client/index.html`；
+2. 复制到 `internal/web/dist`；
+3. 用 `-tags embedclient` 编译，把前端通过 `go:embed` 打进二进制；
+4. 输出 `release/LANPad.exe`（约 12 MB）。
+
+不带 `embedclient` 标签的 `go run` / `go build` 仍然从 `CLIENT_DIR`（默认
+`./dist/client`）读取前端，方便改前端时热更新。
 
 ### 环境变量
 
@@ -91,7 +105,7 @@ npm run go:build     # release/lanpad.exe
 
 ```bash
 npm run go:run     # go run ./cmd/lanpad
-npm run go:build   # 构建 release/lanpad.exe
+npm run go:build   # 编译 release/LANPad.exe（内嵌前端）
 npm run go:test    # go test ./...
 ```
 
@@ -153,9 +167,7 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
    删除时统一关闭。
 3. **`last_editor` 是近似值**：来自最近连接（且非只读）的用户名，不是精确的“最后写入者”。
 4. **没有 Origin 校验**：与 Node v0.1 一致，适合可信局域网；公网部署需要补。
-5. **仍需 `dist/client/` 目录**：Go 二进制还没有把前端 `go:embed` 进去，分发时是
-   “exe + dist” 而不是严格单文件；这是下一步。
-6. **没有版本恢复接口**：`versions` 表仍然在写，但还没有像设计文档里那样的恢复 UI/API。
+5. **没有版本恢复接口**：`versions` 表仍然在写，但还没有像设计文档里那样的恢复 UI/API。
 
 ---
 
@@ -181,9 +193,8 @@ BASE_URL=http://127.0.0.1:8787 node scripts/test-online.mjs
 
 ## 下一步
 
-1. 用 `go:embed` 把 `dist/client` 打进二进制，真正单文件分发；
-2. 删除文档时关闭该文档的在线连接；
-3. 版本列表/恢复到指定版本的 API + UI；
-4. 把 `last_editor` 换成基于 awareness 的精确记录（需要在 ygo 连接层旁路解析 awareness）；
-5. 增加访问码/签名只读链接（设计文档里的 v0.2 内容）；
-6. 逐步移除 `server/` 下的 Node 实现，或保留为兼容分支。
+1. 删除文档时关闭该文档的在线连接；
+2. 版本列表/恢复到指定版本的 API + UI；
+3. 把 `last_editor` 换成基于 awareness 的精确记录（需要在 ygo 连接层旁路解析 awareness）；
+4. 增加访问码/签名只读链接（设计文档里的 v0.2 内容）；
+5. 逐步移除 `server/` 下的 Node 实现，或保留为兼容分支。
