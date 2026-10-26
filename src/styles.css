@@ -1138,6 +1138,7 @@ code,
   inset: 0;
   z-index: 80;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 20px;
   background: rgba(18, 24, 38, 0.48);
@@ -1231,10 +1232,14 @@ code,
 
 .history-modal {
   width: min(880px, 100%);
+  min-width: 0;
+  max-width: 100%;
   max-height: min(90vh, 920px);
   display: flex;
   flex-direction: column;
   padding: 24px 26px 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .history-count {
@@ -1246,11 +1251,12 @@ code,
 
 .history-versions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  overflow-x: auto;
+  min-width: 0;
+  max-width: 100%;
   margin-top: 4px;
-  padding: 4px 2px 10px;
-  scrollbar-width: thin;
+  padding: 4px 2px 6px;
 }
 
 .history-card {
@@ -1323,6 +1329,7 @@ code,
 
 .history-diff {
   flex: 1;
+  min-width: 0;
   min-height: 120px;
   max-height: 44vh;
   overflow: auto;
