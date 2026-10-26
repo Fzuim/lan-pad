@@ -2,22 +2,20 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist "node_modules" (
-  echo [LAN Pad] Installing dependencies...
-  call npm.cmd install
-  if errorlevel 1 goto error
-)
-
-if not exist "dist\server\index.js" (
-  echo [LAN Pad] Building...
+if not exist "dist\client\index.html" (
+  echo [LAN Pad] Building web client...
+  if not exist "node_modules" (
+    call npm.cmd install
+    if errorlevel 1 goto error
+  )
   call npm.cmd run build
   if errorlevel 1 goto error
 )
 
 echo.
-echo [LAN Pad] Starting server. The browser will open in 2 seconds...
+echo [LAN Pad] Starting Go server. The browser will open in 2 seconds...
 start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process 'http://localhost:8787'"
-node dist\server\index.js
+go run ./cmd/lanpad
 goto end
 
 :error

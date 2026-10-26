@@ -38,22 +38,22 @@ npm run go:build && ./release/lanpad.exe
 
 ## 环境要求
 
-- **Node.js ≥ 22.12**（本机实测 22.22；推荐 24 LTS）
-  - 只有从源码运行/自己打包时才需要；直接用打包好的 `LANPad.exe` 的主机不需要装 Node
+- **Go 1.26+**：后端运行时；`npm start` 等同于 `go run ./cmd/lanpad`
+- **Node.js ≥ 22.12**：只用于构建前端（`npm install` / `npm run build`）；日常运行不需要 Node
 - Windows 10/11 / macOS / Linux 均可作为主机
 - 队友只需要 Chrome / Edge / Firefox 等现代浏览器
 - 主机和队友在同一局域网
 
-> 项目使用 Node 内置的 `node:sqlite`。从源码运行时首次启动可能出现一行 `ExperimentalWarning`，不影响使用；打包好的 exe 已关闭该警告。
+> Go 后端使用纯 Go 的 SQLite（modernc.org/sqlite），不需要 CGO；前端构建产物在 `dist/client/`，由 Go 服务直接托管。
 
 ---
 
 ## 快速开始
 
 ```bash
-npm install
-npm run build
-npm start
+npm install      # 构建前端需要
+npm run build    # 生成 dist/client
+npm start        # go run ./cmd/lanpad
 ```
 
 启动后控制台会打印：
@@ -64,9 +64,12 @@ npm start
 主机密钥:   ...
 ```
 
-把“局域网访问”地址发给队友即可。也可以直接双击 `start.bat`（首次会自动安装/构建并打开浏览器）。
+把“局域网访问”地址发给队友即可。也可以直接双击 `start.bat`（会检查前端产物并用 Go 启动）。
 
-### 打包成单文件 exe（发给别人）
+### 单文件 exe（旧 Node 方案，保留作参考）
+
+`scripts/build-exe.mjs` 里的 Node SEA 打包是翻写前的方案，现已由 Go 后端取代；
+Go 版本的构建命令是 `npm run go:build`，产物在 `release/lanpad.exe`。下面是旧方案的说明。
 
 ```bash
 npm run build:exe
@@ -83,7 +86,7 @@ npm run build:exe
 4. 数据（SQLite、截图、`host-key.txt`）自动创建在 **exe 同目录的 `data/`**，整个文件夹拷走即可备份/迁移。
 5. 控制台窗口保持打开；关掉窗口服务就停止。队友打不开时先看窗口里的局域网地址和防火墙提示。
 
-打包后的行为与 `npm start` 一致，另外还有：
+打包后的行为与旧 Node 版 `npm start` 一致，另外还有：
 
 - 可用 exe 同目录的 `.env` 配置 `PORT` / `HOST` / `DATA_DIR` / `PUBLIC_BASE_URL` / `HOST_KEY`；
 - `LANPAD_OPEN=0` 可关闭启动时自动打开浏览器（例如设成开机自启）；

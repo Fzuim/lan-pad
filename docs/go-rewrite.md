@@ -55,17 +55,20 @@ scripts/test-go-sync.mjs      Go 服务端的双客户端同步/重连/只读测
 ```bash
 # 1. 构建前端（改动前端后需要重新执行）
 npm install
-npx vite build
+npm run build
 
-# 2. 启动 Go 后端
-go run ./cmd/lanpad
+# 2. 启动 Go 后端（npm start 已指向 Go）
+npm start            # 等价于 go run ./cmd/lanpad
 
 # 或者编译后再运行
-go build -trimpath -ldflags "-s -w" -o release/lanpad.exe ./cmd/lanpad
+npm run go:build     # release/lanpad.exe
 ./release/lanpad.exe
 ```
 
 默认地址 <http://localhost:8787>，与 Node 版本一致。数据仍在 `./data/`。
+
+`npm run dev` 现在同时启动 Vite 和 Go（`concurrently`）；旧的 `server/` Node 实现只作参考，
+`npm run build:exe` 保留为旧 SEA 打包脚本。
 
 ### 环境变量
 

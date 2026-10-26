@@ -5,14 +5,14 @@
   "type": "module",
   "description": "局域网题目协作板：文字 + 代码 + 截图，免登录实时协作",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"tsx watch server/index.ts\"",
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "dev": "concurrently -k \"vite\" \"go run ./cmd/lanpad\"",
+    "build": "vite build",
     "build:exe": "node scripts/build-exe.mjs",
     "go:build": "go build -trimpath -ldflags \"-s -w\" -o release/lanpad.exe ./cmd/lanpad",
     "go:run": "go run ./cmd/lanpad",
     "go:test": "go test ./...",
-    "start": "node dist/server/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
+    "start": "go run ./cmd/lanpad",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=22.12.0"
