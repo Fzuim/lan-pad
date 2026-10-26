@@ -38,12 +38,13 @@ cmd/lanpad/main.go            启动、端口占用提示、优雅退出、自�
 internal/config/              .env / 环境变量 / 数据目录 / host-key
 internal/docstore/            SQLite：docs、versions、assets、doc_updates
 internal/collab/              ygo 同步服务器、在线人数、只读、最后编辑者
-internal/assets/              图片嗅探、SHA-256、去重落盘
+internal/assets/              图片嗅探、附件类型/文件名、SHA-256、去重落盘
 internal/network/             局域网 IPv4 探测与排序
 internal/web/                 REST API、图片、静态前端、安全响应头
 internal/ids/                 文档 ID / 图片文件名校验
 internal/openbrowser/         跨平台打开浏览器
 scripts/test-go-sync.mjs      Go 服务端的双客户端同步/重连/只读测试
+scripts/test-attachments.mjs  附件粘贴/图标/同步/下载测试
 scripts/build-go.mjs          内嵌前端并编译单文件二进制
 ```
 
@@ -121,7 +122,8 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 - `versions` 增加了 `sha256` 列；旧数据库启动时自动补列并回填哈希。快照策略：新建文档时存一份，
   编辑**停顿约 2 秒**后存一份；如果一直连续输入没有停顿，最多每 15 秒存一份；最后一个人离开时再补一份。
   哈希按“标题 + 正文/格式”计算，内容没变不会重复记录，每个文档最多保留 50 份；
-- `assets`、`settings`、`host-key.txt` 不变。
+- `assets` 增加了 `name`（原始文件名）和 `kind`（`image` / `file`）列；旧数据库自动补列；
+- `settings`、`host-key.txt` 不变。
 
 单次编辑先同步写 log（掉电不丢），标题/`updated_at`/`docs.state` 由 800ms 防抖的
 后台任务刷新；服务退出时强制落盘。每 200 条 update 会触发一次 log 压缩，避免长时间
@@ -144,11 +146,25 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 | `GET` | `/api/docs/:id/versions` | 版本列表（新的在前） |
 | `POST` | `/api/docs/:id/versions` | 立即保存一份快照 |
 | `GET` | `/api/docs/:id/versions/:versionId` | 版本详情（含 base64 Yjs state） |
-| `POST` | `/api/docs/:id/assets` | 上传图片 |
-| `GET` | `/assets/:docId/:filename` | 读取图片 |
+| `POST` | `/api/docs/:id/assets` | 上传图片（≤15MB） |
+| `POST` | `/api/docs/:id/attachments` | 上传附件（≤50MB，任意类型） |
+| `GET` | `/assets/:docId/:filename` | 读取图片/附件 |
 | `WS` | `/collab/:docId` | Yjs + Awareness |
 
 `POST /api/docs/:id/assets` 仍然限制 15 MB、只接受 PNG/JPEG/GIF/WebP，按 SHA-256 去重。
+`POST /api/docs/:id/attachments` 接受任意文件（最大 50 MB），原始文件名保存在 `assets.name`，
+下载时通过 `Content-Disposition` 还原；压缩包、Office、SVG/HTML 等不会以内联方式打开。
+
+---
+
+## 附件
+
+- 前端自定义了 Tiptap 的 `attachment` 原子 block 节点，attrs 里只存 `url/name/size/mime/ext`，
+  所以附件和图片一样通过 Yjs 同步；
+- 粘贴文件、拖拽文件、工具栏“附件”选择都会走 `POST /attachments`；图片仍走原来的图片压缩/上传链路；
+- 卡片按扩展名/MIME 显示不同颜色和标签（RAR/ZIP、PDF、DOC、XLS、PPT、代码、音视频等），
+  带“预览/打开”和“下载”按钮；
+- 客户端和服务端都限制 50 MB；图片仍限制 10/15 MB。
 
 ---
 
@@ -209,6 +225,7 @@ BASE_URL=http://127.0.0.1:8787 node scripts/test-ui.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-online.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-version-cadence.mjs
+BASE_URL=http://127.0.0.1:8787 node scripts/test-attachments.mjs
 ```
 
 已实测通过：中文标题/正文、代码块、图片上传与同步、灯箱、在线人数、断线重连、

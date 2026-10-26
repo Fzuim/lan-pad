@@ -888,6 +888,133 @@ code,
   pointer-events: none;
 }
 
+/* ---------- file attachments ---------- */
+
+.attachment-node {
+  margin: 12px 0;
+}
+
+.attachment-node.is-selected .attachment-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.attachment-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, 100%);
+  border: 1px solid #e5ded1;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px 10px 9px 12px;
+  box-shadow: 0 1px 2px rgba(27, 36, 52, 0.05);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.attachment-card:hover {
+  border-color: #cfc4b2;
+  box-shadow: 0 4px 14px rgba(27, 36, 52, 0.08);
+}
+
+.file-icon {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 46px;
+}
+
+.file-icon-shape {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 1px rgba(27, 36, 52, 0.12));
+}
+
+.file-icon-label {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 34px;
+  transform: translateX(-50%);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attachment-name {
+  max-width: 270px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-sub {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.attachment-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+.attachment-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #7a7367;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.attachment-action:hover {
+  background: #f1ece1;
+  color: var(--ink);
+}
+
+.attachment-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 640px) {
+  .attachment-card {
+    width: 100%;
+  }
+
+  .attachment-name {
+    max-width: 100%;
+  }
+}
+
 .lanpad-editor ::selection {
   background: #dbe4ff;
 }
@@ -924,7 +1051,8 @@ code,
   margin-left: auto;
 }
 
-.hidden-input {
+.hidden-input,
+.attachment-file-input {
   display: none;
 }
 

@@ -1,4 +1,11 @@
-import type { AssetResult, DocMeta, DocVersion, DocVersionDetail, NetworkInfo } from './types'
+import type {
+  AssetResult,
+  AttachmentResult,
+  DocMeta,
+  DocVersion,
+  DocVersionDetail,
+  NetworkInfo,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -70,6 +77,18 @@ export async function uploadAsset(
   if (width) form.append('width', String(width))
   if (height) form.append('height', String(height))
   return request<AssetResult>(`/api/docs/${docId}/assets`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export async function uploadAttachment(
+  docId: string,
+  file: File,
+): Promise<AttachmentResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return request<AttachmentResult>(`/api/docs/${docId}/attachments`, {
     method: 'POST',
     body: form,
   })

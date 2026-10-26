@@ -288,6 +288,66 @@ func TestAssetUploadAndServing(t *testing.T) {
 	}
 }
 
+func TestAttachmentUploadAndServing(t *testing.T) {
+	app := newTestApp(t)
+	_, data := app.request(t, http.MethodPost, "/api/docs",
+		strings.NewReader(`{"title":"附件"}`),
+		map[string]string{"Content-Type": "application/json"})
+	var doc docResponse
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte("Rar!\x1a\x07\x00 fake archive payload")
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "BaoGuaWindowsEvent.rar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data := app.request(t, http.MethodPost, "/api/docs/"+doc.ID+"/attachments", &body,
+		map[string]string{"Content-Type": writer.FormDataContentType()})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload attachment = %d %s", resp.StatusCode, data)
+	}
+	var result struct {
+		URL  string `json:"url"`
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+		MIME string `json:"mime"`
+		Kind string `json:"kind"`
+		Ext  string `json:"ext"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Name != "BaoGuaWindowsEvent.rar" || result.Kind != "file" ||
+		result.MIME != "application/vnd.rar" || result.Ext != "rar" ||
+		result.Size != int64(len(payload)) {
+		t.Fatalf("attachment result = %+v", result)
+	}
+
+	resp, data = app.request(t, http.MethodGet, result.URL, nil, nil)
+	if resp.StatusCode != http.StatusOK || !bytes.Equal(data, payload) {
+		t.Fatalf("attachment = %d, %d bytes", resp.StatusCode, len(data))
+	}
+	if disposition := resp.Header.Get("Content-Disposition"); !strings.Contains(disposition, "attachment") {
+		t.Fatalf("disposition = %q, want attachment", disposition)
+	}
+
+	resp, _ = app.request(t, http.MethodGet, result.URL+"?download=1", nil, nil)
+	if disposition := resp.Header.Get("Content-Disposition"); !strings.Contains(disposition, "attachment") {
+		t.Fatalf("download disposition = %q", disposition)
+	}
+}
+
 func TestStaticSPAAndNotFound(t *testing.T) {
 	app := newTestApp(t)
 
@@ -312,7 +372,7 @@ func TestStaticSPAAndNotFound(t *testing.T) {
 		t.Fatalf("api 404 = %d %s", resp.StatusCode, data)
 	}
 	resp, data = app.request(t, http.MethodGet, "/assets/nope.png", nil, nil)
-	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(data), "图片不存在") {
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(data), "文件不存在") {
 		t.Fatalf("assets 404 = %d %s", resp.StatusCode, data)
 	}
 }

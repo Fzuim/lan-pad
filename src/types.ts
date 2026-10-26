@@ -39,6 +39,15 @@ export type AssetResult = {
   mime: string
 }
 
+export type AttachmentResult = {
+  url: string
+  name: string
+  size: number
+  mime: string
+  kind: 'file' | 'image'
+  ext: string
+}
+
 export type DocVersion = {
   id: number
   created_at: number

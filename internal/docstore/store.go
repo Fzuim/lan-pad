@@ -69,12 +69,14 @@ type VersionDetail struct {
 	State []byte `json:"state"`
 }
 
-// Asset is one uploaded image.
+// Asset is one uploaded image or file attachment.
 type Asset struct {
 	ID        string `json:"id"`
 	DocID     string `json:"doc_id"`
 	SHA256    string `json:"sha256"`
 	Filename  string `json:"filename"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
 	MIME      string `json:"mime"`
 	Size      int64  `json:"size"`
 	Width     *int   `json:"width"`
@@ -154,6 +156,8 @@ CREATE TABLE IF NOT EXISTS assets (
   doc_id     TEXT NOT NULL,
   sha256     TEXT NOT NULL,
   filename   TEXT NOT NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  kind       TEXT NOT NULL DEFAULT 'image',
   mime       TEXT NOT NULL,
   size       INTEGER NOT NULL,
   width      INTEGER,
@@ -202,6 +206,25 @@ WHERE d.state IS NOT NULL
 	}
 	if err := s.backfillVersionHashes(); err != nil {
 		return err
+	}
+	// Older databases only stored images and had no original file name.
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{"name", `ALTER TABLE assets ADD COLUMN name TEXT NOT NULL DEFAULT ''`},
+		{"kind", `ALTER TABLE assets ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'`},
+	} {
+		has, err := s.hasColumn("assets", column.name)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := s.db.Exec(column.ddl); err != nil {
+			return fmt.Errorf("升级 assets 表失败: %w", err)
+		}
 	}
 	return nil
 }
@@ -579,43 +602,60 @@ func stateSHA(state []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// AddAsset inserts image metadata, ignoring a duplicate (doc, sha256).
+// AddAsset inserts image/file metadata, ignoring a duplicate (doc, sha256).
 func (s *Store) AddAsset(asset Asset) (Asset, error) {
+	if asset.Kind == "" {
+		asset.Kind = "image"
+	}
 	_, err := s.db.Exec(
 		`INSERT OR IGNORE INTO assets
-		   (id, doc_id, sha256, filename, mime, size, width, height, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		asset.ID, asset.DocID, asset.SHA256, asset.Filename, asset.MIME,
-		asset.Size, nullableInt(asset.Width), nullableInt(asset.Height), asset.CreatedAt,
+		   (id, doc_id, sha256, filename, name, kind, mime, size, width, height, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		asset.ID, asset.DocID, asset.SHA256, asset.Filename, asset.Name, asset.Kind,
+		asset.MIME, asset.Size, nullableInt(asset.Width), nullableInt(asset.Height), asset.CreatedAt,
 	)
 	if err != nil {
 		return Asset{}, err
 	}
-	found, err := s.GetAssetByFilename(asset.DocID, asset.Filename)
+	found, err := s.GetAssetBySHA(asset.DocID, asset.SHA256)
 	if err != nil {
 		return Asset{}, err
 	}
 	if found == nil {
-		return Asset{}, fmt.Errorf("图片元数据写入失败")
+		return Asset{}, fmt.Errorf("附件元数据写入失败")
 	}
 	return *found, nil
 }
 
-// GetAssetByFilename looks up image metadata for a document.
+// GetAssetByFilename looks up attachment metadata for a document.
 func (s *Store) GetAssetByFilename(docID, filename string) (*Asset, error) {
-	row := s.db.QueryRow(
-		`SELECT id, doc_id, sha256, filename, mime, size, width, height, created_at
+	return s.scanAsset(s.db.QueryRow(
+		`SELECT id, doc_id, sha256, filename, name, kind, mime, size, width, height, created_at
 		 FROM assets
 		 WHERE doc_id = ? AND filename = ?`,
 		docID, filename,
-	)
+	))
+}
+
+// GetAssetBySHA looks up attachment metadata by content hash.
+func (s *Store) GetAssetBySHA(docID, sha string) (*Asset, error) {
+	return s.scanAsset(s.db.QueryRow(
+		`SELECT id, doc_id, sha256, filename, name, kind, mime, size, width, height, created_at
+		 FROM assets
+		 WHERE doc_id = ? AND sha256 = ?`,
+		docID, sha,
+	))
+}
+
+func (s *Store) scanAsset(row *sql.Row) (*Asset, error) {
 	var (
 		asset         Asset
 		width, height sql.NullInt64
 	)
 	err := row.Scan(
-		&asset.ID, &asset.DocID, &asset.SHA256, &asset.Filename, &asset.MIME,
-		&asset.Size, &width, &height, &asset.CreatedAt,
+		&asset.ID, &asset.DocID, &asset.SHA256, &asset.Filename,
+		&asset.Name, &asset.Kind, &asset.MIME, &asset.Size,
+		&width, &height, &asset.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

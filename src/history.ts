@@ -1,5 +1,6 @@
 import * as Y from 'yjs'
 import { yDocToProsemirrorJSON } from '@tiptap/y-tiptap'
+import { formatFileSize } from './files'
 
 export type PMNode = {
   type?: string
@@ -94,6 +95,11 @@ function renderBlock(node: PMNode): string[] {
       return ['---']
     case 'image':
       return [imageText(node)]
+    case 'attachment': {
+      const name = typeof node.attrs?.name === 'string' ? node.attrs.name : '附件'
+      const size = Number(node.attrs?.size ?? 0)
+      return [`[附件] ${name}${size > 0 ? ` (${formatFileSize(size)})` : ''}`]
+    }
     default:
       return node.content ? childBlocks(node) : [inlineText(node)]
   }

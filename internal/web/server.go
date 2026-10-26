@@ -64,12 +64,13 @@ func New(cfg *config.Config, store *docstore.Store, manager *collab.Manager) *Se
 	mux.HandleFunc("POST /api/docs/{id}/versions", s.handleSnapshotVersion)
 	mux.HandleFunc("GET /api/docs/{id}/versions/{versionId}", s.handleGetVersion)
 	mux.HandleFunc("POST /api/docs/{id}/assets", s.handleUploadAsset)
+	mux.HandleFunc("POST /api/docs/{id}/attachments", s.handleUploadAttachment)
 	mux.HandleFunc("GET /assets/{docId}/{filename}", s.handleAsset)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "接口不存在")
 	})
 	mux.HandleFunc("/assets/", func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "图片不存在")
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文件不存在")
 	})
 	mux.Handle("/collab/", manager.Handler())
 	mux.HandleFunc("/", s.handleSPA)
@@ -321,8 +322,7 @@ func (s *Server) handleUploadAsset(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if requestTooLarge(err) {
 			writeError(w, http.StatusRequestEntityTooLarge, "LIMIT_FILE_SIZE", "图片不能超过 15MB")
 			return
 		}
@@ -331,12 +331,16 @@ func (s *Server) handleUploadAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.MultipartForm.RemoveAll()
 
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "NO_FILE", "没有收到图片文件")
 		return
 	}
 	defer file.Close()
+	if header.Size > assets.MaxUploadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "LIMIT_FILE_SIZE", "图片不能超过 15MB")
+		return
+	}
 
 	data, err := io.ReadAll(io.LimitReader(file, assets.MaxUploadBytes+1))
 	if err != nil {
@@ -352,6 +356,7 @@ func (s *Server) handleUploadAsset(w http.ResponseWriter, r *http.Request) {
 		s.store,
 		s.cfg.AssetsDir,
 		docID,
+		header.Filename,
 		data,
 		r.FormValue("width"),
 		r.FormValue("height"),
@@ -367,35 +372,128 @@ func (s *Server) handleUploadAsset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, result)
 }
 
+func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
+	docID := r.PathValue("id")
+	if !ids.IsDocID(docID) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文档不存在")
+		return
+	}
+	doc, err := s.store.GetDocMeta(docID)
+	if err != nil {
+		serverError(w, "读取文档", err)
+		return
+	}
+	if doc == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文档不存在")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, assets.MaxAttachmentBytes+(2<<20))
+	if err := r.ParseMultipartForm(assets.MaxAttachmentBytes + (2 << 20)); err != nil {
+		if requestTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "LIMIT_FILE_SIZE", "附件不能超过 50MB")
+			return
+		}
+		log.Printf("[upload] attachment parse: %v", err)
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "附件上传失败")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "NO_FILE", "没有收到附件文件")
+		return
+	}
+	defer file.Close()
+	if header.Size > assets.MaxAttachmentBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "LIMIT_FILE_SIZE", "附件不能超过 50MB")
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, assets.MaxAttachmentBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "附件上传失败")
+		return
+	}
+	if len(data) > assets.MaxAttachmentBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "LIMIT_FILE_SIZE", "附件不能超过 50MB")
+		return
+	}
+
+	result, err := assets.SaveAttachment(
+		s.store,
+		s.cfg.AssetsDir,
+		docID,
+		header.Filename,
+		data,
+	)
+	if err != nil {
+		serverError(w, "保存附件", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	docID := r.PathValue("docId")
 	filename := r.PathValue("filename")
 	if !ids.IsDocID(docID) || !ids.IsAssetFile(filename) {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "图片不存在")
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文件不存在")
 		return
 	}
 
 	asset, err := s.store.GetAssetByFilename(docID, filename)
 	if err != nil {
-		serverError(w, "读取图片", err)
+		serverError(w, "读取文件", err)
 		return
 	}
 	if asset == nil {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "图片不存在")
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文件不存在")
 		return
 	}
 
 	full := filepath.Join(s.cfg.AssetsDir, docID, filename)
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "图片不存在")
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文件不存在")
 		return
+	}
+
+	name := asset.Name
+	if name == "" {
+		name = filename
+	}
+	disposition := "inline"
+	if r.URL.Query().Get("download") == "1" || !inlinePreview(asset.MIME) {
+		disposition = "attachment"
+	}
+	if value := mime.FormatMediaType(disposition, map[string]string{"filename": name}); value != "" {
+		w.Header().Set("Content-Disposition", value)
 	}
 
 	w.Header().Set("Content-Type", asset.MIME)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, full)
+}
+
+func requestTooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return true
+	}
+	return strings.Contains(err.Error(), "request body too large")
+}
+
+func inlinePreview(mimeType string) bool {
+	switch strings.ToLower(strings.Split(mimeType, ";")[0]) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp",
+		"application/pdf", "text/plain", "text/markdown", "application/json", "text/csv":
+		return true
+	default:
+		return false
+	}
 }
 
 // ---------------------------------------------------------------------------

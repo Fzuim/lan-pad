@@ -1,14 +1,15 @@
 # LAN Pad · 局域网题目协作
 
-一个给队内比赛用的轻量协作文档：**文字 + 代码块 + 截图**，主机启动服务，队友用局域网链接打开即可一起编辑。
+一个给队内比赛用的轻量协作文档：**文字 + 代码块 + 截图 + 附件**，主机启动服务，队友用局域网链接打开即可一起编辑。
 
 - 免登录、无账号；链接即房间
-- 实时同步（Yjs + Hocuspocus）
+- 实时同步（Yjs + y-websocket）
 - 自定义名字、颜色、在线状态和远端光标
 - 代码块语法高亮 + 语言选择 + 复制
 - 截图 `Ctrl/⌘+V` 粘贴、拖拽或选择文件；点击放大
+- 附件 `Ctrl/⌘+V` 粘贴、拖拽或工具栏选择，最大 50MB；压缩包/PDF/Office/代码等不同类型显示不同图标
 - 支持从网页、Word、WPS、聊天工具直接复制图文混排，图片自动上传
-- SQLite 持久化，重启不丢；图片存本地
+- SQLite 持久化，重启不丢；图片和附件存本地
 - 首页可删除文档（需要主机密钥，软删除）
 - Windows 上 `npm start` 或双击 `start.bat`
 - 可打包成单个 `LANPad.exe`：别人下载后双击即用，不需要安装 Node
@@ -188,9 +189,9 @@ netsh advfirewall firewall add rule name="LAN Pad 8787" dir=in action=allow prot
 
 ```text
 data/
-├─ lanpad.db          # SQLite：文档、版本、图片元数据
+├─ lanpad.db          # SQLite：文档、版本、图片/附件元数据
 ├─ host-key.txt       # 主机密钥
-└─ assets/<docId>/    # 截图文件
+└─ assets/<docId>/    # 截图和附件文件
 ```
 
 - 比赛结束后直接复制整个 `data/` 目录归档。
@@ -236,6 +237,12 @@ node scripts/test-clipboard.mjs
 
 # 富文本 + 多图混合粘贴
 node scripts/test-mixed-paste.mjs
+
+# Go 服务端：附件粘贴/图标/同步/下载
+BASE_URL=http://127.0.0.1:8787 node scripts/test-attachments.mjs
+
+# 版本历史差异/恢复
+BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
 ```
 
 浏览器脚本默认使用 `C:\Program Files\Google\Chrome\Application\chrome.exe`，可用 `CHROME_PATH` 覆盖；服务地址可用 `BASE_URL` 覆盖。
@@ -252,31 +259,39 @@ node scripts/test-mixed-paste.mjs
 | `POST` | `/api/docs` | 新建文档 |
 | `GET` | `/api/docs/:id` | 文档元数据 |
 | `DELETE` | `/api/docs/:id` | 软删除（需 `X-Host-Key`） |
-| `POST` | `/api/docs/:id/assets` | 上传截图 |
-| `GET` | `/assets/:docId/:filename` | 读取截图 |
-| `WS` | `/collab` | Hocuspocus/Yjs 同步 |
+| `POST` | `/api/docs/:id/assets` | 上传截图（≤15MB） |
+| `POST` | `/api/docs/:id/attachments` | 上传附件（≤50MB） |
+| `GET` | `/api/docs/:id/versions` | 版本历史列表 |
+| `POST` | `/api/docs/:id/versions` | 立即保存快照 |
+| `GET` | `/api/docs/:id/versions/:versionId` | 版本详情 |
+| `GET` | `/assets/:docId/:filename` | 读取截图/附件 |
+| `WS` | `/collab/:docId` | Yjs + awareness 同步 |
 
 ---
 
 ## 目录结构
 
 ```text
-server/
-  index.ts       Express + WebSocket upgrade + API
-  db.ts          SQLite schema / CRUD
-  collab.ts      Hocuspocus、在线状态、持久化钩子
-  assets.ts      截图校验/存储
-  network.ts     局域网 IP 探测
-  sea.ts         单文件 exe 运行时检测 / 内嵌前端读取
-  open.ts        启动时自动打开浏览器
-  config.ts      环境变量与数据目录
+cmd/lanpad/main.go   Go 入口（配置、监听、优雅退出、自动开浏览器）
+internal/
+  config/            环境变量 / .env / 数据目录 / host-key
+  docstore/          SQLite：docs / versions / assets / doc_updates
+  collab/            ygo 同步服务器、在线人数、只读
+  assets/            图片/附件校验、命名、SHA-256、落盘
+  web/               REST API、图片/附件、静态前端
+  network/           局域网 IP 探测
+  ids/               文档 ID / 文件名校验
+  openbrowser/       跨平台打开浏览器
 src/
-  App.tsx        路由
-  components/    首页、文档页、工具栏、名字/分享弹窗
-  api.ts         前端 API
-  styles.css     全部样式
-scripts/         同步/浏览器测试、build-go.mjs（Go 单文件打包）、build-exe.mjs（旧 Node 打包）
-design.md        设计方案
+  App.tsx            路由
+  components/        首页、文档页、工具栏、历史、附件卡片、弹窗
+  editor/            Tiptap attachment 节点
+  api.ts             前端 API
+  styles.css         全部样式
+scripts/             测试、build-go.mjs（Go 单文件打包）
+server/              旧 Node 实现，仅作参考
+design.md            设计方案
+docs/go-rewrite.md   Go 翻写说明
 ```
 
 ---
@@ -284,10 +299,11 @@ design.md        设计方案
 ## 已知限制（v0.1）
 
 - 无账号体系；拿到链接的人都能编辑。适合可信的队内局域网。
-- `?mode=view` 只隐藏工具栏并设置 `contenteditable=false`，不是服务端强制只读。
+- `?mode=view` 在 Go 版本由服务端强制只读（连接发来的文档更新会被丢弃）。
 - 版本历史已实现快照、差异对比和恢复；还没有独立的“导出为 PDF/Word”功能。
 - 没有离线 IndexedDB 缓存；页面刷新需要服务在线。
-- 大文档/大图仅做基础限制（文本建议 <5MB，图片 ≤10MB、宽度 ≤2560）。
+- 图片 ≤10MB（宽度 ≤2560）；附件 ≤50MB；文本建议 <5MB。
+- 附件预览依赖浏览器：PDF/文本可直接打开，压缩包和 Office 文件会按下载处理。
 - 复杂 Word 表格/样式会做简化，正文和图片会保留；需要表格/公式可以后续补。
 - 部分 WPS/Word 版本只在 HTML 里放本地 `file://` 图片路径，程序会尝试从 RTF 剪贴板提取图片；如果源程序只提供浏览器无法解码的 EMF，仍会提示单独截图。
 - `node:sqlite` 在 Node 22 仍标记为 experimental；正式长期使用可换 `better-sqlite3`。

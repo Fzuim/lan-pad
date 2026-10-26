@@ -402,6 +402,50 @@ func TestOpenMigratesOldVersionsTable(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesOldAssetsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-assets.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE assets (
+		id TEXT PRIMARY KEY,
+		doc_id TEXT NOT NULL,
+		sha256 TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		mime TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		width INTEGER,
+		height INTEGER,
+		created_at INTEGER NOT NULL,
+		UNIQUE(doc_id, sha256)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO assets (id, doc_id, sha256, filename, mime, size, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"asset1", "abcdefghijkl", "deadbeef", "deadbeef.png", "image/png", 123, time.Now().UnixMilli(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open legacy assets db: %v", err)
+	}
+	defer store.Close()
+
+	asset, err := store.GetAssetByFilename("abcdefghijkl", "deadbeef.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset == nil || asset.Kind != "image" || asset.Name != "" {
+		t.Fatalf("migrated asset = %+v", asset)
+	}
+}
+
 func TestCleanTitle(t *testing.T) {
 	if got := CleanTitle("   "); got != "未命名文档" {
 		t.Fatalf("empty title = %q", got)

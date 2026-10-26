@@ -9,12 +9,15 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { common, createLowlight } from 'lowlight'
 import type { WebsocketProvider } from 'y-websocket'
 import type * as Y from 'yjs'
-import { uploadAsset } from '../api'
+import { uploadAsset, uploadAttachment } from '../api'
+import { Attachment, type AttachmentAttrs } from '../editor/Attachment'
+import { fileExtension } from '../files'
 import type { UserInfo } from '../types'
 
 const lowlight = createLowlight(common)
 const MAX_UPLOAD = 10 * 1024 * 1024
 const MAX_SOURCE = 25 * 1024 * 1024
+const MAX_ATTACHMENT = 50 * 1024 * 1024
 const MAX_WIDTH = 2560
 const MAX_PIXELS = 40_000_000
 
@@ -41,14 +44,38 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number)
   return new Promise((resolve) => canvas.toBlob(resolve, type, quality))
 }
 
-function imageFilesFromTransfer(data: DataTransfer | null): File[] {
+function filesFromTransfer(data: DataTransfer | null): File[] {
   if (!data) return []
-  const fromFiles = Array.from(data.files ?? []).filter((file) => file.type.startsWith('image/'))
+  const fromFiles = Array.from(data.files ?? [])
   if (fromFiles.length) return fromFiles
   return Array.from(data.items ?? [])
-    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .filter((item) => item.kind === 'file')
     .map((item) => item.getAsFile())
     .filter((file): file is File => Boolean(file))
+}
+
+/** Images that the editor handles inline; SVG and other formats become attachments. */
+function isEditableImage(file: File): boolean {
+  const type = file.type.toLowerCase()
+  if (type === 'image/png' || type === 'image/jpeg' || type === 'image/gif' || type === 'image/webp') {
+    return true
+  }
+  return /\.(png|jpe?g|gif|webp)$/i.test(file.name)
+}
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+}
+
+function normalizeImageFile(file: File): File {
+  if (file.type) return file
+  const ext = /\.([a-z0-9]+)$/i.exec(file.name)?.[1].toLowerCase() ?? ''
+  const type = IMAGE_MIME_BY_EXT[ext]
+  return type ? new File([file], file.name, { type }) : file
 }
 
 async function prepareImage(file: File): Promise<PreparedImage> {
@@ -283,6 +310,11 @@ function insertImageNode(
   editor.chain().focus().insertContentAt(pos, { type: 'image', attrs }).run()
 }
 
+function insertAttachmentNode(editor: Editor, attrs: AttachmentAttrs, position?: number): void {
+  const pos = imageInsertPosition(editor, position)
+  editor.chain().focus().insertContentAt(pos, { type: 'attachment', attrs }).run()
+}
+
 export default function CollaborativeEditor({
   docId,
   ydoc,
@@ -300,42 +332,78 @@ export default function CollaborativeEditor({
 
   const uploadImage = useCallback(
     async (file: File) => {
-      const prepared = await prepareImage(file)
+      const prepared = await prepareImage(normalizeImageFile(file))
       return uploadAsset(docId, prepared.file, prepared.width, prepared.height)
+    },
+    [docId],
+  )
+
+  const uploadAttachmentFile = useCallback(
+    async (file: File) => {
+      if (file.size > MAX_ATTACHMENT) {
+        throw new Error(`附件「${file.name || '未命名'}」超过 50MB`)
+      }
+      if (file.size === 0) {
+        throw new Error(`附件「${file.name || '未命名'}」是空文件`)
+      }
+      return uploadAttachment(docId, file)
     },
     [docId],
   )
 
   const uploadOne = useCallback(
     async (file: File, position?: number) => {
-      const saved = await uploadImage(file)
       const editor = editorRef.current
       if (!editor) return
-      insertImageNode(
+
+      if (isEditableImage(file)) {
+        const saved = await uploadImage(file)
+        insertImageNode(
+          editor,
+          {
+            src: saved.url,
+            alt: file.name.replace(/\.[^.]+$/, '') || '截图',
+          },
+          position,
+        )
+        return
+      }
+
+      const saved = await uploadAttachmentFile(file)
+      insertAttachmentNode(
         editor,
         {
-          src: saved.url,
-          alt: file.name.replace(/\.[^.]+$/, '') || '截图',
+          url: saved.url,
+          name: file.name || saved.name,
+          size: saved.size,
+          mime: saved.mime,
+          ext: saved.ext || fileExtension(file.name),
         },
         position,
       )
     },
-    [uploadImage],
+    [uploadAttachmentFile, uploadImage],
   )
 
   const uploadFiles = useCallback(
     async (files: File[], position?: number) => {
       if (!files.length) return
       setUploading((count) => count + files.length)
+      let firstError: string | null = null
       try {
         for (const file of files) {
-          await uploadOne(file, position)
+          try {
+            await uploadOne(file, position)
+          } catch (error) {
+            if (!firstError) {
+              firstError = error instanceof Error ? error.message : '文件上传失败'
+            }
+          }
         }
-      } catch (error) {
-        onError(error instanceof Error ? error.message : '图片上传失败')
       } finally {
         setUploading((count) => Math.max(0, count - files.length))
       }
+      if (firstError) onError(firstError)
     },
     [onError, uploadOne],
   )
@@ -466,9 +534,10 @@ export default function CollaborativeEditor({
           allowBase64: false,
           HTMLAttributes: { class: 'doc-image' },
         }),
+        Attachment,
         CodeBlockLowlight.configure({ lowlight }),
         Placeholder.configure({
-          placeholder: '把题目描述、代码、截图放在这里……',
+          placeholder: '把题目描述、代码、截图、附件放在这里……',
         }),
       ],
       editable: !readOnly,
@@ -479,9 +548,12 @@ export default function CollaborativeEditor({
         },
         handlePaste: (_view, event) => {
           if (readOnly) return false
-          const html = event.clipboardData?.getData('text/html') || ''
-          const rtf = event.clipboardData?.getData('text/rtf') || ''
-          const files = imageFilesFromTransfer(event.clipboardData)
+          const clipboard = event.clipboardData
+          const html = clipboard?.getData('text/html') || ''
+          const rtf = clipboard?.getData('text/rtf') || ''
+          const allFiles = filesFromTransfer(clipboard)
+          const imageFiles = allFiles.filter(isEditableImage)
+          const attachmentFiles = allFiles.filter((file) => !isEditableImage(file))
           const hasEmbeddedImage =
             /<img[^>]+src=["'](data:|blob:|file:|cid:)/i.test(html) || /<v:imagedata/i.test(html)
           const hasImageTag = /<img[\s>]/i.test(html)
@@ -489,25 +561,41 @@ export default function CollaborativeEditor({
           const hasFilePlaceholder =
             /<img[^>]+src=["'](file:|cid:|\s*["'])/i.test(html) || /<v:imagedata/i.test(html)
           const shouldUseRtf = Boolean(
-            rtf && (hasFilePlaceholder || (!hasImageTag && files.length === 0)),
+            rtf && (hasFilePlaceholder || (!hasImageTag && imageFiles.length === 0)),
           )
           const rtfImages =
-            shouldUseRtf && files.length < Math.max(1, imageCount) ? extractRtfImages(rtf) : []
-
-          if (
+            shouldUseRtf && imageFiles.length < Math.max(1, imageCount)
+              ? extractRtfImages(rtf)
+              : []
+          const needsHtmlImport = Boolean(
             html &&
-            (hasEmbeddedImage ||
-              (files.length > 0 && !hasImageTag) ||
-              rtfImages.length > 0)
-          ) {
+              (hasEmbeddedImage ||
+                (imageFiles.length > 0 && !hasImageTag) ||
+                rtfImages.length > 0),
+          )
+
+          if (attachmentFiles.length) {
             event.preventDefault()
-            void importHtmlWithImages(html, files, rtfImages)
+            void (async () => {
+              if (needsHtmlImport) {
+                await importHtmlWithImages(html, imageFiles, rtfImages)
+                await uploadFiles(attachmentFiles)
+                return
+              }
+              await uploadFiles([...imageFiles, ...attachmentFiles])
+            })()
             return true
           }
 
-          if (files.length) {
+          if (needsHtmlImport) {
             event.preventDefault()
-            void uploadFiles(files)
+            void importHtmlWithImages(html, imageFiles, rtfImages)
+            return true
+          }
+
+          if (imageFiles.length) {
+            event.preventDefault()
+            void uploadFiles(imageFiles)
             return true
           }
 
@@ -515,7 +603,7 @@ export default function CollaborativeEditor({
         },
         handleDrop: (view, event, _slice, moved) => {
           if (readOnly || moved) return false
-          const files = imageFilesFromTransfer(event.dataTransfer)
+          const files = filesFromTransfer(event.dataTransfer)
           if (!files.length) return false
           event.preventDefault()
           const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
@@ -563,7 +651,7 @@ export default function CollaborativeEditor({
       }
     }}>
       <EditorContent editor={editor} />
-      {uploading > 0 ? <div className="upload-badge">正在上传截图…</div> : null}
+      {uploading > 0 ? <div className="upload-badge">正在上传文件…</div> : null}
     </div>
   )
 }

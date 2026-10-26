@@ -5,6 +5,7 @@ type Props = {
   editor: Editor | null
   disabled?: boolean
   onPickImage: () => void
+  onPickAttachment: () => void
 }
 
 type ToolButtonProps = {
@@ -44,7 +45,7 @@ function ToolButton({ active, disabled, title, onClick, children }: ToolButtonPr
   )
 }
 
-export default function Toolbar({ editor, disabled, onPickImage }: Props) {
+export default function Toolbar({ editor, disabled, onPickImage, onPickAttachment }: Props) {
   const state = useEditorState({
     editor,
     selector: ({ editor: current }) => {
@@ -218,6 +219,13 @@ export default function Toolbar({ editor, disabled, onPickImage }: Props) {
         </ToolButton>
         <ToolButton title="插入截图" disabled={disabled} onClick={onPickImage}>
           截图
+        </ToolButton>
+        <ToolButton
+          title="插入附件（最大 50MB，也可以直接粘贴文件）"
+          disabled={disabled}
+          onClick={onPickAttachment}
+        >
+          附件
         </ToolButton>
       </div>
 

@@ -66,6 +66,7 @@ export default function DocPage({ docId, onBack }: Props) {
   const [lightbox, setLightbox] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
   const uploadRef = useRef<((files: File[]) => Promise<void>) | null>(null)
   const toastTimer = useRef<number | null>(null)
   const titleInitialized = useRef(false)
@@ -282,7 +283,11 @@ export default function DocPage({ docId, onBack }: Props) {
       {readOnly ? (
         <div className="readonly-banner">只读查看模式；把链接里的 <code>?mode=view</code> 去掉即可编辑。</div>
       ) : (
-        <Toolbar editor={editor} onPickImage={() => fileInputRef.current?.click()} />
+        <Toolbar
+          editor={editor}
+          onPickImage={() => fileInputRef.current?.click()}
+          onPickAttachment={() => attachmentInputRef.current?.click()}
+        />
       )}
 
       <input
@@ -291,6 +296,18 @@ export default function DocPage({ docId, onBack }: Props) {
         accept="image/png,image/jpeg,image/webp,image/gif"
         multiple
         className="hidden-input"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ''
+          handleFiles(files)
+        }}
+      />
+
+      <input
+        ref={attachmentInputRef}
+        type="file"
+        multiple
+        className="attachment-file-input"
         onChange={(event) => {
           const files = Array.from(event.target.files ?? [])
           event.target.value = ''
