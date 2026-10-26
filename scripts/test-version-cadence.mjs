@@ -101,6 +101,31 @@ try {
   assert.ok(sawTransition, 'no history card shows the 123456 -> 12345 change')
 
   await pageA.screenshot({ path: 'scripts/screenshot-version-cadence.png', fullPage: true })
+
+  // Continuous typing must debounce into one snapshot, not one per 2s.
+  const burstDoc = await (
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'burst count' }),
+    })
+  ).json()
+  const burstPage = await contextA.newPage()
+  await openAs(burstPage, burstDoc.id, 'Burst')
+  await burstPage.locator('.lanpad-editor').click()
+  await burstPage.keyboard.type('abcdefghijklmnopqrstuvwxyz0123456789', { delay: 160 })
+  await burstPage.waitForTimeout(3000)
+  const burstVersions = await (
+    await fetch(`${base}/api/docs/${burstDoc.id}/versions`)
+  ).json()
+  console.log('continuous typing versions:', burstVersions.versions.length)
+  assert.ok(
+    burstVersions.versions.length <= 3,
+    `continuous typing created too many versions: ${burstVersions.versions.length}`,
+  )
+  assert.ok(burstVersions.versions.length >= 2, 'continuous typing was not snapshotted')
+  await burstPage.close()
+
   console.log('VERSION CADENCE OK')
 } finally {
   await browser.close()
