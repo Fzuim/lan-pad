@@ -1,8 +1,9 @@
 import { chromium } from 'playwright-core'
 import assert from 'node:assert/strict'
 
-const base = 'http://127.0.0.1:8787'
-const executablePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+const base = process.env.BASE_URL || 'http://127.0.0.1:8787'
+const executablePath =
+  process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const browser = await chromium.launch({ executablePath, headless: true })
 const c1 = await browser.newContext()
 const c2 = await browser.newContext()

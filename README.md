@@ -11,6 +11,7 @@
 - SQLite 持久化，重启不丢；图片存本地
 - 首页可删除文档（需要主机密钥，软删除）
 - Windows 上 `npm start` 或双击 `start.bat`
+- 可打包成单个 `LANPad.exe`：别人下载后双击即用，不需要安装 Node
 
 ![LAN Pad 文档页：文字、代码块和截图](docs/screenshot.png)
 
@@ -18,14 +19,32 @@
 
 ---
 
+## Go 版本（`feat/go-rewrite` 分支）
+
+后端已经翻写为纯 Go（[ygo](https://github.com/Deln0r/ygo) + modernc SQLite），前端保留 React + Tiptap：
+
+```bash
+npx vite build           # 构建前端
+go run ./cmd/lanpad      # 启动 Go 服务
+# 或者
+npm run go:build && ./release/lanpad.exe
+```
+
+- 运行时不需要 Node；数据格式与 Node 版兼容，可以直接打开旧的 `data/lanpad.db`
+- 实时协议由 Hocuspocus 换成 y-websocket，前端已适配；`?mode=view` 改为服务端强制只读
+- 详细的模块对照、差异与待办见 [docs/go-rewrite.md](docs/go-rewrite.md)
+
+---
+
 ## 环境要求
 
 - **Node.js ≥ 22.12**（本机实测 22.22；推荐 24 LTS）
+  - 只有从源码运行/自己打包时才需要；直接用打包好的 `LANPad.exe` 的主机不需要装 Node
 - Windows 10/11 / macOS / Linux 均可作为主机
 - 队友只需要 Chrome / Edge / Firefox 等现代浏览器
 - 主机和队友在同一局域网
 
-> 项目使用 Node 内置的 `node:sqlite`，首次启动可能出现一行 `ExperimentalWarning`，不影响使用。
+> 项目使用 Node 内置的 `node:sqlite`。从源码运行时首次启动可能出现一行 `ExperimentalWarning`，不影响使用；打包好的 exe 已关闭该警告。
 
 ---
 
@@ -46,6 +65,38 @@ npm start
 ```
 
 把“局域网访问”地址发给队友即可。也可以直接双击 `start.bat`（首次会自动安装/构建并打开浏览器）。
+
+### 打包成单文件 exe（发给别人）
+
+```bash
+npm run build:exe
+```
+
+产物是 `release/LANPad.exe`（约 85 MB），里面已经包含 Node 运行时、服务端和前端静态文件。
+把它发给其他 Windows 机器，**双击即可启动**，对方不需要装 Node、npm，也不需要 `npm install`。
+
+接收方的使用方式：
+
+1. 把 `LANPad.exe` 放到有写权限的目录（桌面、D 盘等；不要放 `C:\Program Files`）。
+2. 双击运行。首次启动 Windows 防火墙会弹窗，勾选“专用网络”并允许。
+3. 控制台会显示本机地址、局域网地址和主机密钥，并自动打开浏览器。
+4. 数据（SQLite、截图、`host-key.txt`）自动创建在 **exe 同目录的 `data/`**，整个文件夹拷走即可备份/迁移。
+5. 控制台窗口保持打开；关掉窗口服务就停止。队友打不开时先看窗口里的局域网地址和防火墙提示。
+
+打包后的行为与 `npm start` 一致，另外还有：
+
+- 可用 exe 同目录的 `.env` 配置 `PORT` / `HOST` / `DATA_DIR` / `PUBLIC_BASE_URL` / `HOST_KEY`；
+- `LANPAD_OPEN=0` 可关闭启动时自动打开浏览器（例如设成开机自启）；
+- 端口被占用时会提示，不会一闪而过；
+- 升级：直接用新 exe 覆盖旧 exe，保留 `data/` 即可。
+
+注意事项：
+
+- exe 只能在 **Windows x64** 上运行，架构跟随构建机（当前是 node.exe 的架构）；macOS/Linux 需要各自的构建产物。
+- 未做代码签名，首次运行可能被 SmartScreen 拦一下，点“更多信息 → 仍要运行”；企业环境可以用自己的证书签名。
+- 防火墙规则按**程序**放行即可；如果按端口放行，规则见下面的 [Windows 防火墙](#windows-防火墙)。
+- 图标沿用 Node 默认图标；需要品牌图标可以在构建后追加资源编辑步骤。
+- 分发时只需要 `LANPad.exe` 一个文件；`data/` 是运行后生成的，不要一起发（除非是要迁移已有数据）。
 
 ### 开发模式
 
@@ -208,13 +259,15 @@ server/
   collab.ts      Hocuspocus、在线状态、持久化钩子
   assets.ts      截图校验/存储
   network.ts     局域网 IP 探测
+  sea.ts         单文件 exe 运行时检测 / 内嵌前端读取
+  open.ts        启动时自动打开浏览器
   config.ts      环境变量与数据目录
 src/
   App.tsx        路由
   components/    首页、文档页、工具栏、名字/分享弹窗
   api.ts         前端 API
   styles.css     全部样式
-scripts/         同步/浏览器测试
+scripts/         同步/浏览器测试、build-exe.mjs（单文件打包）
 design.md        设计方案
 ```
 

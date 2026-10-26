@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/react'
-import { HocuspocusProvider } from '@hocuspocus/provider'
+import { WebsocketProvider } from 'y-websocket'
 import * as Y from 'yjs'
 import { getDoc, getNetwork } from '../api'
 import type { DocMeta, NetworkInfo, PresenceUser, UserInfo } from '../types'
@@ -68,7 +68,7 @@ export default function DocPage({ docId, onBack }: Props) {
   const [showName, setShowName] = useState(!storedUser.current.hasStoredName)
 
   const [ydoc] = useState(() => new Y.Doc())
-  const [provider, setProvider] = useState<HocuspocusProvider | null>(null)
+  const [provider, setProvider] = useState<WebsocketProvider | null>(null)
   const [meta, setMeta] = useState<DocMeta | null>(null)
   const [network, setNetwork] = useState<NetworkInfo | null>(null)
   const [loadError, setLoadError] = useState('')
@@ -125,13 +125,14 @@ export default function DocPage({ docId, onBack }: Props) {
   useEffect(() => {
     if (!meta) return
 
-    const next = new HocuspocusProvider({
-      url: makeWsUrl(docId),
-      name: docId,
-      document: ydoc,
-      onStatus: ({ status: nextStatus }) => setStatus(nextStatus),
-      onSynced: ({ state }) => setSynced(state),
+    const next = new WebsocketProvider(makeWsUrl(docId), docId, ydoc, {
+      params: {
+        user: user.name,
+        mode: readOnly ? 'view' : 'edit',
+      },
     })
+    next.on('status', ({ status: nextStatus }: { status: string }) => setStatus(nextStatus))
+    next.on('sync', (isSynced: boolean) => setSynced(isSynced))
 
     setProvider(next)
     const awareness = next.awareness
@@ -168,7 +169,7 @@ export default function DocPage({ docId, onBack }: Props) {
 
   useEffect(() => {
     if (!provider) return
-    provider.setAwarenessField('user', { name: user.name, color: user.color })
+    provider.awareness.setLocalStateField('user', { name: user.name, color: user.color })
   }, [provider, user.name, user.color])
 
   useEffect(() => {

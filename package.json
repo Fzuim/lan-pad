@@ -7,16 +7,17 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"tsx watch server/index.ts\"",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "build:exe": "node scripts/build-exe.mjs",
+    "go:build": "go build -trimpath -ldflags \"-s -w\" -o release/lanpad.exe ./cmd/lanpad",
+    "go:run": "go run ./cmd/lanpad",
+    "go:test": "go test ./...",
     "start": "node dist/server/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
-    "build:exe": "node scripts/build-exe.mjs"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "engines": {
     "node": ">=22.12.0"
   },
   "dependencies": {
-    "@hocuspocus/provider": "^4.7.1",
-    "@hocuspocus/server": "^4.7.1",
     "@tiptap/core": "^3.32.0",
     "@tiptap/extension-code-block-lowlight": "^3.32.0",
     "@tiptap/extension-collaboration": "^3.32.0",
@@ -33,6 +34,7 @@
     "multer": "^2.0.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "y-websocket": "^3.1.0",
     "yjs": "^13.6.33"
   },
   "devDependencies": {

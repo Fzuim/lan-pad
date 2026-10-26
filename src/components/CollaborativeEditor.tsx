@@ -7,7 +7,7 @@ import Image from '@tiptap/extension-image'
 import Placeholder from '@tiptap/extension-placeholder'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { common, createLowlight } from 'lowlight'
-import type { HocuspocusProvider } from '@hocuspocus/provider'
+import type { WebsocketProvider } from 'y-websocket'
 import type * as Y from 'yjs'
 import { uploadAsset } from '../api'
 import type { UserInfo } from '../types'
@@ -21,7 +21,7 @@ const MAX_PIXELS = 40_000_000
 type Props = {
   docId: string
   ydoc: Y.Doc
-  provider: HocuspocusProvider
+  provider: WebsocketProvider
   user: UserInfo
   readOnly: boolean
   onEditor: (editor: Editor | null) => void
@@ -526,7 +526,7 @@ export default function CollaborativeEditor({
       onCreate: ({ editor: instance }) => {
         editorRef.current = instance
         onEditor(instance)
-        provider.setAwarenessField('user', { name: user.name, color: user.color })
+        provider.awareness.setLocalStateField('user', { name: user.name, color: user.color })
       },
       onDestroy: () => {
         editorRef.current = null
@@ -552,7 +552,7 @@ export default function CollaborativeEditor({
   useEffect(() => {
     if (!editor) return
     editor.commands.updateUser({ name: user.name, color: user.color })
-    provider.setAwarenessField('user', { name: user.name, color: user.color })
+    provider.awareness.setLocalStateField('user', { name: user.name, color: user.color })
   }, [editor, provider, user.name, user.color])
 
   return (
