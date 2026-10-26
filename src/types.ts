@@ -38,3 +38,16 @@ export type AssetResult = {
   height: number | null
   mime: string
 }
+
+export type DocVersion = {
+  id: number
+  created_at: number
+  title: string
+  size: number
+  sha256: string
+}
+
+export type DocVersionDetail = DocVersion & {
+  /** Base64-encoded Yjs V1 update. */
+  state: string
+}

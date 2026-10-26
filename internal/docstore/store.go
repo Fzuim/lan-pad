@@ -7,7 +7,9 @@ package docstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -28,9 +30,9 @@ const (
 	// synchronously on every edit, so this only affects list metadata.
 	MetaDebounce = 800 * time.Millisecond
 
-	// VersionInterval mirrors the Node server: at most one snapshot per
-	// document every five minutes.
-	VersionInterval = 5 * time.Minute
+	// VersionInterval is how often an actively edited document is
+	// snapshotted into the versions table.
+	VersionInterval = time.Minute
 
 	// KeepVersions is how many snapshots are retained per document.
 	KeepVersions = 50
@@ -46,6 +48,21 @@ type DocMeta struct {
 	CreatedAt  int64   `json:"created_at"`
 	UpdatedAt  int64   `json:"updated_at"`
 	LastEditor *string `json:"last_editor"`
+}
+
+// Version is one point-in-time snapshot of a document.
+type Version struct {
+	ID        int64  `json:"id"`
+	CreatedAt int64  `json:"created_at"`
+	Title     string `json:"title"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+}
+
+// VersionDetail includes the Yjs state needed to render or restore it.
+type VersionDetail struct {
+	Version
+	State []byte `json:"state"`
 }
 
 // Asset is one uploaded image.
@@ -69,6 +86,8 @@ type Store struct {
 	mu     sync.Mutex
 	cache  map[string]*cachedDoc
 	closed bool
+
+	versionMu sync.Mutex
 
 	lastEditor func(docID string) string
 }
@@ -117,6 +136,7 @@ CREATE TABLE IF NOT EXISTS versions (
   doc_id     TEXT NOT NULL,
   state      BLOB NOT NULL,
   title      TEXT,
+  sha256     TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_versions_doc ON versions(doc_id, created_at DESC);
@@ -162,7 +182,83 @@ WHERE d.state IS NOT NULL
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("初始化数据库失败: %w", err)
 	}
+	// Older databases predate the content hash column.
+	hasSHA, err := s.hasColumn("versions", "sha256")
+	if err != nil {
+		return err
+	}
+	if !hasSHA {
+		if _, err := s.db.Exec(`ALTER TABLE versions ADD COLUMN sha256 TEXT`); err != nil {
+			return fmt.Errorf("升级 versions 表失败: %w", err)
+		}
+	}
+	if err := s.backfillVersionHashes(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// backfillVersionHashes fills the sha256 column for snapshots written by
+// older builds. The row count is bounded by KeepVersions per document.
+func (s *Store) backfillVersionHashes() error {
+	rows, err := s.db.Query(`SELECT id, state FROM versions WHERE sha256 IS NULL OR sha256 = ''`)
+	if err != nil {
+		return err
+	}
+	type pending struct {
+		id  int64
+		sha string
+	}
+	var updates []pending
+	for rows.Next() {
+		var (
+			id    int64
+			state []byte
+		)
+		if err := rows.Scan(&id, &state); err != nil {
+			rows.Close()
+			return err
+		}
+		updates = append(updates, pending{id: id, sha: stateSHA(state)})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, item := range updates {
+		if _, err := s.db.Exec(`UPDATE versions SET sha256 = ? WHERE id = ?`, item.sha, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) hasColumn(table, column string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultV   sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultV, &pk); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // SetLastEditorResolver installs a callback that supplies the most recent
@@ -196,14 +292,22 @@ func (s *Store) CreateDoc(id, title string) (DocMeta, error) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO docs (id, title, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-		id, clean, state, now, now,
+		`INSERT INTO docs (id, title, state, created_at, updated_at, last_version_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, clean, state, now, now, now,
 	); err != nil {
 		return DocMeta{}, err
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO doc_updates (doc_id, update_blob, created_at) VALUES (?, ?, ?)`,
 		id, state, now,
+	); err != nil {
+		return DocMeta{}, err
+	}
+	// Keep the blank document as the first history entry.
+	if _, err := tx.Exec(
+		`INSERT INTO versions (doc_id, state, title, sha256, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id, state, clean, stateSHA(state), now,
 	); err != nil {
 		return DocMeta{}, err
 	}
@@ -290,6 +394,169 @@ func (s *Store) SoftDeleteDoc(id string) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// ListVersions returns a document's snapshots, newest first.
+func (s *Store) ListVersions(docID string) ([]Version, error) {
+	rows, err := s.db.Query(
+		`SELECT id, created_at, COALESCE(title, ''), length(state), COALESCE(sha256, '')
+		 FROM versions
+		 WHERE doc_id = ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT ?`,
+		docID, KeepVersions,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Version, 0, 8)
+	for rows.Next() {
+		var version Version
+		if err := rows.Scan(
+			&version.ID,
+			&version.CreatedAt,
+			&version.Title,
+			&version.Size,
+			&version.SHA256,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, version)
+	}
+	return out, rows.Err()
+}
+
+// GetVersion returns one snapshot including its Yjs state.
+func (s *Store) GetVersion(docID string, versionID int64) (*VersionDetail, error) {
+	var detail VersionDetail
+	err := s.db.QueryRow(
+		`SELECT id, created_at, COALESCE(title, ''), state, COALESCE(sha256, '')
+		 FROM versions
+		 WHERE doc_id = ? AND id = ?`,
+		docID, versionID,
+	).Scan(
+		&detail.ID,
+		&detail.CreatedAt,
+		&detail.Title,
+		&detail.State,
+		&detail.SHA256,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	detail.Size = int64(len(detail.State))
+	if detail.SHA256 == "" {
+		detail.SHA256 = stateSHA(detail.State)
+	}
+	return &detail, nil
+}
+
+// SnapshotNow captures the current live state immediately. It returns nil
+// when the content is identical to the newest snapshot.
+func (s *Store) SnapshotNow(ctx context.Context, docID string) (*Version, error) {
+	meta, err := s.GetDocMeta(docID)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		return nil, sql.ErrNoRows
+	}
+
+	cc, err := s.cachedDoc(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	cc.mu.Lock()
+	state := ygo.EncodeStateAsUpdate(cc.doc)
+	title := CleanTitle(ygo.NewText(cc.doc, "title").String())
+	cc.mu.Unlock()
+
+	return s.insertVersion(docID, state, title, time.Now().UnixMilli(), true)
+}
+
+func (s *Store) insertVersion(docID string, state []byte, title string, now int64, force bool) (*Version, error) {
+	s.versionMu.Lock()
+	defer s.versionMu.Unlock()
+
+	if !force {
+		var lastVersionAt int64
+		err := s.db.QueryRow(`SELECT last_version_at FROM docs WHERE id = ?`, docID).Scan(&lastVersionAt)
+		if err != nil {
+			return nil, err
+		}
+		if now-lastVersionAt < VersionInterval.Milliseconds() {
+			return nil, nil
+		}
+	}
+
+	sha := stateSHA(state)
+	var latest string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(sha256, '') FROM versions
+		 WHERE doc_id = ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		docID,
+	).Scan(&latest)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if latest == sha {
+		return nil, nil
+	}
+
+	title = CleanTitle(title)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
+		`INSERT INTO versions (doc_id, state, title, sha256, created_at) VALUES (?, ?, ?, ?, ?)`,
+		docID, state, title, sha, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM versions
+		 WHERE doc_id = ?
+		   AND id NOT IN (
+		     SELECT id FROM versions WHERE doc_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
+		   )`,
+		docID, docID, KeepVersions,
+	); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE docs SET last_version_at = ? WHERE id = ?`, now, docID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &Version{
+		ID:        id,
+		CreatedAt: now,
+		Title:     title,
+		Size:      int64(len(state)),
+		SHA256:    sha,
+	}, nil
+}
+
+func stateSHA(state []byte) string {
+	sum := sha256.Sum256(state)
+	return hex.EncodeToString(sum[:])
 }
 
 // AddAsset inserts image metadata, ignoring a duplicate (doc, sha256).
@@ -684,41 +951,9 @@ func (s *Store) flushMeta(docName string) {
 }
 
 func (s *Store) maybeVersion(docID string, state []byte, title string, now int64) {
-	var lastVersionAt int64
-	err := s.db.QueryRow(`SELECT last_version_at FROM docs WHERE id = ?`, docID).Scan(&lastVersionAt)
-	if err != nil {
-		return
+	if _, err := s.insertVersion(docID, state, title, now, false); err != nil {
+		fmt.Fprintf(os.Stderr, "[db] 保存文档版本失败 %s: %v\n", docID, err)
 	}
-	if now-lastVersionAt < VersionInterval.Milliseconds() {
-		return
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(
-		`INSERT INTO versions (doc_id, state, title, created_at) VALUES (?, ?, ?, ?)`,
-		docID, state, title, now,
-	); err != nil {
-		return
-	}
-	if _, err := tx.Exec(
-		`DELETE FROM versions
-		 WHERE doc_id = ?
-		   AND id NOT IN (
-		     SELECT id FROM versions WHERE doc_id = ? ORDER BY created_at DESC LIMIT ?
-		   )`,
-		docID, docID, KeepVersions,
-	); err != nil {
-		return
-	}
-	if _, err := tx.Exec(`UPDATE docs SET last_version_at = ? WHERE id = ?`, now, docID); err != nil {
-		return
-	}
-	_ = tx.Commit()
 }
 
 // ---------------------------------------------------------------------------

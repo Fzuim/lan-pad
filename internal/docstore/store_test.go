@@ -194,6 +194,137 @@ func TestSoftDeleteHidesDocument(t *testing.T) {
 	}
 }
 
+func TestVersionsCaptureAndDeduplicate(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	meta, err := store.CreateDoc("abcdefghijkl", "初始版本")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versions, err := store.ListVersions(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("initial versions = %d, want 1", len(versions))
+	}
+	if versions[0].Title != "初始版本" || versions[0].SHA256 == "" || versions[0].Size == 0 {
+		t.Fatalf("initial version = %+v", versions[0])
+	}
+
+	detail, err := store.GetVersion(meta.ID, versions[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail == nil {
+		t.Fatal("GetVersion returned nil")
+	}
+	doc := ygo.NewDoc()
+	if err := ygo.ApplyUpdate(doc, detail.State); err != nil {
+		t.Fatal(err)
+	}
+	if got := ygo.NewText(doc, "title").String(); got != "初始版本" {
+		t.Fatalf("version title = %q", got)
+	}
+
+	peer := ygo.NewDoc()
+	body := ygo.NewText(peer, "body")
+	txn := peer.WriteTxn()
+	if err := body.Insert(txn, 0, "新增内容"); err != nil {
+		t.Fatal(err)
+	}
+	txn.Commit()
+	if err := store.StoreUpdate(ctx, meta.ID, ygo.EncodeStateAsUpdate(peer)); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := store.SnapshotNow(ctx, meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created == nil {
+		t.Fatal("SnapshotNow did not create a version")
+	}
+	if created.Size <= versions[0].Size {
+		t.Fatalf("new version size = %d, initial = %d", created.Size, versions[0].Size)
+	}
+
+	versions, err = store.ListVersions(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d, want 2", len(versions))
+	}
+	if versions[0].ID != created.ID {
+		t.Fatalf("newest version id = %d, want %d", versions[0].ID, created.ID)
+	}
+
+	// No content change: a forced snapshot is a no-op.
+	again, err := store.SnapshotNow(ctx, meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != nil {
+		t.Fatalf("duplicate snapshot was stored: %+v", again)
+	}
+}
+
+func TestVersionsOfUnknownVersion(t *testing.T) {
+	store := newTestStore(t)
+	meta, err := store.CreateDoc("abcdefghijkl", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := store.GetVersion(meta.ID, 99999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail != nil {
+		t.Fatalf("detail = %+v", detail)
+	}
+}
+
+func TestOpenMigratesOldVersionsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE versions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		doc_id TEXT NOT NULL,
+		state BLOB NOT NULL,
+		title TEXT,
+		created_at INTEGER NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO versions (doc_id, state, title, created_at) VALUES (?, ?, ?, ?)`,
+		"abcdefghijkl", []byte("legacy-state"), "旧版本", time.Now().UnixMilli(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open legacy db: %v", err)
+	}
+	defer store.Close()
+
+	var sha string
+	if err := store.db.QueryRow(`SELECT sha256 FROM versions LIMIT 1`).Scan(&sha); err != nil {
+		t.Fatal(err)
+	}
+	if len(sha) != 64 {
+		t.Fatalf("backfilled sha = %q", sha)
+	}
+}
+
 func TestCleanTitle(t *testing.T) {
 	if got := CleanTitle("   "); got != "未命名文档" {
 		t.Fatalf("empty title = %q", got)

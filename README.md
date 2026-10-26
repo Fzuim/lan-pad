@@ -35,6 +35,7 @@ npm run go:build         # 生成 release/LANPad.exe（约 12 MB）
 - 运行时不需要 Node；单文件 exe 也不需要 `dist/client`，双击即可启动
 - 数据格式与 Node 版兼容，可以直接打开旧的 `data/lanpad.db`
 - 实时协议由 Hocuspocus 换成 y-websocket，前端已适配；`?mode=view` 改为服务端强制只读
+- 版本历史：自动快照、哈希/大小、行级差异对比、恢复并支持 `Ctrl+Z` 撤销
 - 详细的模块对照、差异与待办见 [docs/go-rewrite.md](docs/go-rewrite.md)
 
 ---
@@ -284,11 +285,11 @@ design.md        设计方案
 
 - 无账号体系；拿到链接的人都能编辑。适合可信的队内局域网。
 - `?mode=view` 只隐藏工具栏并设置 `contenteditable=false`，不是服务端强制只读。
-- 没有版本恢复 UI、导出 PDF/Markdown 的完整实现。
+- 版本历史已实现快照、差异对比和恢复；还没有独立的“导出为 PDF/Word”功能。
 - 没有离线 IndexedDB 缓存；页面刷新需要服务在线。
 - 大文档/大图仅做基础限制（文本建议 <5MB，图片 ≤10MB、宽度 ≤2560）。
 - 复杂 Word 表格/样式会做简化，正文和图片会保留；需要表格/公式可以后续补。
 - 部分 WPS/Word 版本只在 HTML 里放本地 `file://` 图片路径，程序会尝试从 RTF 剪贴板提取图片；如果源程序只提供浏览器无法解码的 EMF，仍会提示单独截图。
 - `node:sqlite` 在 Node 22 仍标记为 experimental；正式长期使用可换 `better-sqlite3`。
 
-后续如果比赛现场需要，我可以继续补：访问码、签名只读链接、版本恢复、导出。
+后续如果比赛现场需要，我可以继续补：访问码、签名只读链接、导出。

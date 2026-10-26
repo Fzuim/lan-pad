@@ -1,3 +1,4 @@
+import type * as Y from 'yjs'
 import type { NetworkInfo } from './types'
 
 export const COLORS = [
@@ -54,6 +55,27 @@ export function chooseBase(network: NetworkInfo | null): string {
 export function makeWsUrl(_docId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/collab`
+}
+
+/** Replace a Y.Text's content with the shortest possible delete/insert. */
+export function replaceYText(text: Y.Text, next: string): void {
+  const prev = text.toString()
+  if (prev === next) return
+
+  let start = 0
+  while (start < prev.length && start < next.length && prev[start] === next[start]) start++
+
+  let prevEnd = prev.length
+  let nextEnd = next.length
+  while (prevEnd > start && nextEnd > start && prev[prevEnd - 1] === next[nextEnd - 1]) {
+    prevEnd--
+    nextEnd--
+  }
+
+  text.doc?.transact(() => {
+    if (prevEnd > start) text.delete(start, prevEnd - start)
+    if (nextEnd > start) text.insert(start, next.slice(start, nextEnd))
+  })
 }
 
 export async function copyText(text: string): Promise<boolean> {

@@ -81,6 +81,15 @@ func New(store *docstore.Store) *Manager {
 
 		OnDisconnect: func(connID, docName string) {
 			m.removeOnline(docName, connID)
+			// Capture the final state when the last editor leaves, so a
+			// short session still leaves a history entry.
+			if m.OnlineCount(docName) == 0 {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, _ = store.SnapshotNow(ctx, docName)
+				}()
+			}
 		},
 	})
 

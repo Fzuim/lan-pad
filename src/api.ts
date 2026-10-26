@@ -1,4 +1,4 @@
-import type { AssetResult, DocMeta, NetworkInfo } from './types'
+import type { AssetResult, DocMeta, DocVersion, DocVersionDetail, NetworkInfo } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -72,5 +72,21 @@ export async function uploadAsset(
   return request<AssetResult>(`/api/docs/${docId}/assets`, {
     method: 'POST',
     body: form,
+  })
+}
+
+export async function getVersions(docId: string): Promise<{ versions: DocVersion[] }> {
+  return request<{ versions: DocVersion[] }>(`/api/docs/${docId}/versions`)
+}
+
+export async function getVersion(docId: string, versionId: number): Promise<DocVersionDetail> {
+  return request<DocVersionDetail>(`/api/docs/${docId}/versions/${versionId}`)
+}
+
+export async function snapshotVersion(
+  docId: string,
+): Promise<{ created: boolean; version?: DocVersion }> {
+  return request<{ created: boolean; version?: DocVersion }>(`/api/docs/${docId}/versions`, {
+    method: 'POST',
   })
 }

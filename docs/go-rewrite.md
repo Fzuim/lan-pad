@@ -118,7 +118,8 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 - `docs.state` 仍然保存完整的 Yjs V1 update，Node 版可以直接读；
 - 新增 `doc_updates` 表，作为 ygo 的 append-only update log；启动时会把只有
   `docs.state` 的旧文档自动补一条 log；
-- `versions` 仍然是 5 分钟一次、最多 50 份；
+- `versions` 增加了 `sha256` 列；旧数据库启动时自动补列并回填哈希。快照策略：新建文档时存一份，
+  编辑过程中每分钟最多一份，最后一个人离开时再存一份；内容没变会按 SHA-256 去重，每个文档最多保留 50 份；
 - `assets`、`settings`、`host-key.txt` 不变。
 
 单次编辑先同步写 log（掉电不丢），标题/`updated_at`/`docs.state` 由 800ms 防抖的
@@ -139,11 +140,30 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 | `POST` | `/api/docs` | 新建文档 |
 | `GET` | `/api/docs/:id` | 文档元数据 |
 | `DELETE` | `/api/docs/:id` | 软删除，需 `X-Host-Key` |
+| `GET` | `/api/docs/:id/versions` | 版本列表（新的在前） |
+| `POST` | `/api/docs/:id/versions` | 立即保存一份快照 |
+| `GET` | `/api/docs/:id/versions/:versionId` | 版本详情（含 base64 Yjs state） |
 | `POST` | `/api/docs/:id/assets` | 上传图片 |
 | `GET` | `/assets/:docId/:filename` | 读取图片 |
 | `WS` | `/collab/:docId` | Yjs + Awareness |
 
 `POST /api/docs/:id/assets` 仍然限制 15 MB、只接受 PNG/JPEG/GIF/WebP，按 SHA-256 去重。
+
+---
+
+## 版本历史
+
+文档页标题栏的“历史”按钮会打开版本面板：
+
+- 按时间倒序显示快照卡片（相对时间、内容哈希、state 大小）；
+- 选中快照后，把它的 Yjs state 解码成 ProseMirror JSON，再转成纯文本与当前正文做行级 LCS diff：
+  红色 `-` 是恢复会删掉的行，绿色 `+` 是当前独有的行；
+- 可把某个版本下载成 Markdown 文本；
+- **恢复由前端完成**：`editor.commands.setContent(...)` 产生一次普通的本地编辑，经 Yjs 同步给所有
+  在线队友，因此对所有人生效，并且可以被 `Ctrl+Z` 撤销。Go 端不需要也不能直接“替换”在线文档；
+- 恢复前会调用 `POST /versions` 把当前状态存一份，避免恢复后找不到恢复前的内容；
+- 只读连接可以查看和下载历史，但恢复按钮禁用；
+- 旧文档第一次打开历史时，如果没有快照，会自动补一份当前状态的基线。
 
 ---
 
@@ -167,14 +187,13 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
    删除时统一关闭。
 3. **`last_editor` 是近似值**：来自最近连接（且非只读）的用户名，不是精确的“最后写入者”。
 4. **没有 Origin 校验**：与 Node v0.1 一致，适合可信局域网；公网部署需要补。
-5. **没有版本恢复接口**：`versions` 表仍然在写，但还没有像设计文档里那样的恢复 UI/API。
 
 ---
 
 ## 验证
 
 ```bash
-# Go 单元/集成测试：docstore、assets、HTTP API、静态资源
+# Go 单元/集成测试：docstore、assets、HTTP API、版本、静态资源
 go test ./...
 
 # 双客户端同步 + awareness + 重连 + 服务端只读
@@ -184,17 +203,17 @@ node scripts/test-go-sync.mjs <docId> http://127.0.0.1:8787
 BASE_URL=http://127.0.0.1:8787 node scripts/test-browser.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-ui.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-online.mjs
+BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
 ```
 
 已实测通过：中文标题/正文、代码块、图片上传与同步、灯箱、在线人数、断线重连、
-`?mode=view` 服务端只读，以及从旧 Node 数据库启动。
+`?mode=view` 服务端只读、版本差异/恢复/Ctrl+Z 撤销，以及从旧 Node 数据库启动。
 
 ---
 
 ## 下一步
 
 1. 删除文档时关闭该文档的在线连接；
-2. 版本列表/恢复到指定版本的 API + UI；
-3. 把 `last_editor` 换成基于 awareness 的精确记录（需要在 ygo 连接层旁路解析 awareness）；
-4. 增加访问码/签名只读链接（设计文档里的 v0.2 内容）；
-5. 逐步移除 `server/` 下的 Node 实现，或保留为兼容分支。
+2. 把 `last_editor` 换成基于 awareness 的精确记录（需要在 ygo 连接层旁路解析 awareness）；
+3. 增加访问码/签名只读链接（设计文档里的 v0.2 内容）；
+4. 逐步移除 `server/` 下的 Node 实现，或保留为兼容分支。

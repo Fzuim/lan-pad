@@ -9,10 +9,12 @@ import {
   makeWsUrl,
   pickColor,
   randomName,
+  replaceYText,
   sanitizeName,
 } from '../utils'
 import NameDialog from './NameDialog'
 import ShareDialog from './ShareDialog'
+import HistoryDialog from './HistoryDialog'
 import Presence from './Presence'
 import Toolbar from './Toolbar'
 import CollaborativeEditor from './CollaborativeEditor'
@@ -42,26 +44,6 @@ function loadUser(): StoredUser {
   }
 }
 
-function replaceYText(text: Y.Text, next: string): void {
-  const prev = text.toString()
-  if (prev === next) return
-
-  let start = 0
-  while (start < prev.length && start < next.length && prev[start] === next[start]) start++
-
-  let prevEnd = prev.length
-  let nextEnd = next.length
-  while (prevEnd > start && nextEnd > start && prev[prevEnd - 1] === next[nextEnd - 1]) {
-    prevEnd--
-    nextEnd--
-  }
-
-  text.doc?.transact(() => {
-    if (prevEnd > start) text.delete(start, prevEnd - start)
-    if (nextEnd > start) text.insert(start, next.slice(start, nextEnd))
-  })
-}
-
 export default function DocPage({ docId, onBack }: Props) {
   const storedUser = useRef<StoredUser>(loadUser())
   const [user, setUser] = useState<UserInfo>(storedUser.current.user)
@@ -79,6 +61,7 @@ export default function DocPage({ docId, onBack }: Props) {
   const [chars, setChars] = useState(0)
   const [editor, setEditor] = useState<Editor | null>(null)
   const [showShare, setShowShare] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const [toast, setToast] = useState('')
   const [lightbox, setLightbox] = useState('')
 
@@ -198,6 +181,7 @@ export default function DocPage({ docId, onBack }: Props) {
       if (event.key === 'Escape') {
         setLightbox('')
         setShowShare(false)
+        setShowHistory(false)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -281,6 +265,14 @@ export default function DocPage({ docId, onBack }: Props) {
           <button type="button" className="btn btn-ghost hide-small" onClick={() => setShowName(true)}>
             改名
           </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setShowHistory(true)}
+            disabled={!editor || !synced}
+          >
+            历史
+          </button>
           <button type="button" className="btn btn-primary" onClick={() => setShowShare(true)}>
             分享
           </button>
@@ -337,6 +329,18 @@ export default function DocPage({ docId, onBack }: Props) {
 
       {showName ? <NameDialog initialName={user.name} onSave={handleSaveName} /> : null}
       {showShare ? <ShareDialog link={shareLink} onClose={() => setShowShare(false)} /> : null}
+      {showHistory ? (
+        <HistoryDialog
+          docId={docId}
+          editor={editor}
+          ydoc={ydoc}
+          readOnly={readOnly}
+          synced={synced}
+          onClose={() => setShowHistory(false)}
+          onRestored={notify}
+          onError={notify}
+        />
+      ) : null}
       {lightbox ? (
         <div className="lightbox" onClick={() => setLightbox('')} role="dialog" aria-label="查看截图">
           <img src={lightbox} alt="截图预览" onClick={(event) => event.stopPropagation()} />

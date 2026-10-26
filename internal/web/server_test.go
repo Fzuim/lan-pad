@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -9,8 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Deln0r/ygo"
 
 	"github.com/Fzuim/lan-pad/internal/collab"
 	"github.com/Fzuim/lan-pad/internal/config"
@@ -137,6 +141,91 @@ func TestDocumentLifecycle(t *testing.T) {
 	resp, _ = app.request(t, http.MethodGet, "/api/docs/"+created.ID, nil, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete = %d", resp.StatusCode)
+	}
+}
+
+func TestVersionAPI(t *testing.T) {
+	app := newTestApp(t)
+
+	_, data := app.request(t, http.MethodPost, "/api/docs",
+		strings.NewReader(`{"title":"版本测试"}`),
+		map[string]string{"Content-Type": "application/json"})
+	var doc docResponse
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data := app.request(t, http.MethodGet, "/api/docs/"+doc.ID+"/versions", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list versions = %d %s", resp.StatusCode, data)
+	}
+	var list struct {
+		Versions []docstore.Version `json:"versions"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Versions) != 1 {
+		t.Fatalf("initial versions = %d, want 1", len(list.Versions))
+	}
+
+	resp, data = app.request(t, http.MethodGet,
+		"/api/docs/"+doc.ID+"/versions/"+strconv.FormatInt(list.Versions[0].ID, 10), nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get version = %d %s", resp.StatusCode, data)
+	}
+	var detail docstore.VersionDetail
+	if err := json.Unmarshal(data, &detail); err != nil {
+		t.Fatal(err)
+	}
+	ydoc := ygo.NewDoc()
+	if err := ygo.ApplyUpdate(ydoc, detail.State); err != nil {
+		t.Fatal(err)
+	}
+	if got := ygo.NewText(ydoc, "title").String(); got != "版本测试" {
+		t.Fatalf("version title = %q", got)
+	}
+
+	// No edits yet: forcing a snapshot is a no-op.
+	resp, data = app.request(t, http.MethodPost, "/api/docs/"+doc.ID+"/versions", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"created":false`) {
+		t.Fatalf("snapshot unchanged = %d %s", resp.StatusCode, data)
+	}
+
+	peer := ygo.NewDoc()
+	text := ygo.NewText(peer, "body")
+	txn := peer.WriteTxn()
+	if err := text.Insert(txn, 0, "新的正文"); err != nil {
+		t.Fatal(err)
+	}
+	txn.Commit()
+	if err := app.store.StoreUpdate(context.Background(), doc.ID, ygo.EncodeStateAsUpdate(peer)); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data = app.request(t, http.MethodPost, "/api/docs/"+doc.ID+"/versions", nil, nil)
+	if resp.StatusCode != http.StatusCreated || !strings.Contains(string(data), `"created":true`) {
+		t.Fatalf("snapshot = %d %s", resp.StatusCode, data)
+	}
+
+	resp, data = app.request(t, http.MethodGet, "/api/docs/"+doc.ID+"/versions", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list versions = %d", resp.StatusCode)
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Versions) != 2 {
+		t.Fatalf("versions after edit = %d, want 2", len(list.Versions))
+	}
+
+	resp, _ = app.request(t, http.MethodGet, "/api/docs/"+doc.ID+"/versions/99999", nil, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown version = %d", resp.StatusCode)
+	}
+	resp, _ = app.request(t, http.MethodGet, "/api/docs/aaaaaaaaaaaa/versions", nil, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown doc = %d", resp.StatusCode)
 	}
 }
 

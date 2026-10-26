@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,9 @@ func New(cfg *config.Config, store *docstore.Store, manager *collab.Manager) *Se
 	mux.HandleFunc("POST /api/docs", s.handleCreateDoc)
 	mux.HandleFunc("GET /api/docs/{id}", s.handleGetDoc)
 	mux.HandleFunc("DELETE /api/docs/{id}", s.handleDeleteDoc)
+	mux.HandleFunc("GET /api/docs/{id}/versions", s.handleListVersions)
+	mux.HandleFunc("POST /api/docs/{id}/versions", s.handleSnapshotVersion)
+	mux.HandleFunc("GET /api/docs/{id}/versions/{versionId}", s.handleGetVersion)
 	mux.HandleFunc("POST /api/docs/{id}/assets", s.handleUploadAsset)
 	mux.HandleFunc("GET /assets/{docId}/{filename}", s.handleAsset)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
@@ -220,6 +224,83 @@ func (s *Server) handleDeleteDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) docOr404(w http.ResponseWriter, r *http.Request) (*docstore.DocMeta, bool) {
+	id := r.PathValue("id")
+	if !ids.IsDocID(id) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文档不存在")
+		return nil, false
+	}
+	doc, err := s.store.GetDocMeta(id)
+	if err != nil {
+		serverError(w, "读取文档", err)
+		return nil, false
+	}
+	if doc == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "文档不存在")
+		return nil, false
+	}
+	return doc, true
+}
+
+func (s *Server) handleListVersions(w http.ResponseWriter, r *http.Request) {
+	doc, ok := s.docOr404(w, r)
+	if !ok {
+		return
+	}
+	versions, err := s.store.ListVersions(doc.ID)
+	if err != nil {
+		serverError(w, "读取版本列表", err)
+		return
+	}
+	if len(versions) == 0 {
+		// Documents created by the Node build (or before versioning) get a
+		// baseline snapshot the first time history is opened.
+		if version, snapErr := s.store.SnapshotNow(r.Context(), doc.ID); snapErr == nil && version != nil {
+			versions = []docstore.Version{*version}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+}
+
+func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	doc, ok := s.docOr404(w, r)
+	if !ok {
+		return
+	}
+	versionID, err := strconv.ParseInt(r.PathValue("versionId"), 10, 64)
+	if err != nil || versionID <= 0 {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "版本不存在")
+		return
+	}
+	version, err := s.store.GetVersion(doc.ID, versionID)
+	if err != nil {
+		serverError(w, "读取版本", err)
+		return
+	}
+	if version == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "版本不存在")
+		return
+	}
+	writeJSON(w, http.StatusOK, version)
+}
+
+func (s *Server) handleSnapshotVersion(w http.ResponseWriter, r *http.Request) {
+	doc, ok := s.docOr404(w, r)
+	if !ok {
+		return
+	}
+	version, err := s.store.SnapshotNow(r.Context(), doc.ID)
+	if err != nil {
+		serverError(w, "保存版本", err)
+		return
+	}
+	if version == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"created": false})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"created": true, "version": version})
 }
 
 func (s *Server) handleUploadAsset(w http.ResponseWriter, r *http.Request) {
