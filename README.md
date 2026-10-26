@@ -10,6 +10,8 @@
 - 附件 `Ctrl/⌘+V` 粘贴、拖拽或工具栏选择，最大 50MB；压缩包/PDF/Office/代码等不同类型显示不同图标
 - 支持从网页、Word、WPS、聊天工具直接复制图文混排，图片自动上传
 - SQLite 持久化，重启不丢；图片和附件存本地
+- 版本历史：自动快照、差异对比、恢复并支持 `Ctrl+Z` 撤销
+- 一键导出 ZIP：`document.md` + 图片/附件，Markdown 使用相对路径引用
 - 首页可删除文档（需要主机密钥，软删除）
 - Windows 上 `npm start` 或双击 `start.bat`
 - 可打包成单个 `LANPad.exe`：别人下载后双击即用，不需要安装 Node
@@ -37,6 +39,7 @@ npm run go:build         # 生成 release/LANPad.exe（约 12 MB）
 - 数据格式与 Node 版兼容，可以直接打开旧的 `data/lanpad.db`
 - 实时协议由 Hocuspocus 换成 y-websocket，前端已适配；`?mode=view` 改为服务端强制只读
 - 版本历史：自动快照、哈希/大小、行级差异对比、恢复并支持 `Ctrl+Z` 撤销
+- 一键导出 ZIP：`document.md` + 图片/附件文件，Markdown 里使用相对路径引用
 - 详细的模块对照、差异与待办见 [docs/go-rewrite.md](docs/go-rewrite.md)
 
 ---
@@ -143,11 +146,13 @@ DATA_DIR=./data
    - 输入文字，或用工具栏加粗/标题/列表/引用；
    - 点“代码块”，选择 C++ / Python / Java 等语言；
    - `Ctrl/⌘+V` 粘贴截图，或把图片拖进正文；
+   - `Ctrl/⌘+V` 粘贴文件，或用“附件”按钮/拖拽，单个文件最大 50MB；
    - 从网页/Word/WPS 复制“文字 + 图片”直接粘贴，图片会自动上传；
    - 点击图片打开灯箱，`Esc` 关闭。
 5. 顶部会显示在线队友、颜色、同步状态。
+6. 点“导出”会下载一个 ZIP：`document.md` + `images/` + `files/`，Markdown 里的图片和附件都指向压缩包内的相对路径。
 
-> `?name=红队-01` 可以给固定电脑预填名字；`?mode=view` 是只读查看（v0.1 仅前端约束，不是安全边界）。
+> `?name=红队-01` 可以给固定电脑预填名字；`?mode=view` 是只读查看（Go 版本由服务端强制只读）。
 
 ---
 
@@ -243,6 +248,9 @@ BASE_URL=http://127.0.0.1:8787 node scripts/test-attachments.mjs
 
 # 版本历史差异/恢复
 BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
+
+# 导出 ZIP（Markdown + 图片/附件）
+BASE_URL=http://127.0.0.1:8787 node scripts/test-export.mjs
 ```
 
 浏览器脚本默认使用 `C:\Program Files\Google\Chrome\Application\chrome.exe`，可用 `CHROME_PATH` 覆盖；服务地址可用 `BASE_URL` 覆盖。
@@ -287,6 +295,8 @@ src/
   components/        首页、文档页、工具栏、历史、附件卡片、弹窗
   editor/            Tiptap attachment 节点
   api.ts             前端 API
+  markdown.ts        Tiptap JSON → Markdown
+  exportDocument.ts  ZIP 打包与下载
   styles.css         全部样式
 scripts/             测试、build-go.mjs（Go 单文件打包）
 server/              旧 Node 实现，仅作参考

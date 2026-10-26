@@ -187,6 +187,28 @@ Go 版直接复用 Node 版的数据库结构，`data/lanpad.db` 可以双向打
 
 ---
 
+## 导出
+
+标题栏的“导出”按钮会把**当前文档**打成 ZIP 下载：
+
+```text
+导出测试文档.zip
+├─ document.md
+├─ images/<sha256>.png
+└─ files/BaoGuaWindowsEvent.rar
+```
+
+- Markdown 由当前 Tiptap JSON 在前端生成，支持标题、段落、加粗/斜体/删除线/行内代码、
+  链接、代码块、列表、引用、分割线、图片和附件；
+- 图片写成 `![alt](images/<sha>.png)`，附件写成 `[原始文件名](files/...)`，路径相对 ZIP 根目录；
+- 导出时逐个 `fetch` 文档里引用到的本地 `/assets/...` 文件并放进 ZIP，图片和附件都真正随包下载；
+- 外部 `http(s)` 图片不做下载，Markdown 里保留原始 URL；
+- 文件按内容 SHA-256 去重；同名附件会自动加短哈希后缀，避免覆盖；
+- 导出只包含当前文档，不含版本历史；导出过程中按钮显示进度，失败会提示具体哪个文件下载失败；
+- 压缩包用 JSZip 在浏览器端生成，不需要额外后端接口。
+
+---
+
 ## 实时同步与在线状态
 
 - ygo 负责 Sync Step1/2、增量 update、QueryAwareness、awareness 广播；
@@ -226,6 +248,7 @@ BASE_URL=http://127.0.0.1:8787 node scripts/test-online.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-history.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-version-cadence.mjs
 BASE_URL=http://127.0.0.1:8787 node scripts/test-attachments.mjs
+BASE_URL=http://127.0.0.1:8787 node scripts/test-export.mjs
 ```
 
 已实测通过：中文标题/正文、代码块、图片上传与同步、灯箱、在线人数、断线重连、

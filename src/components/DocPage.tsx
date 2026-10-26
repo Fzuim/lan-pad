@@ -3,6 +3,8 @@ import type { Editor } from '@tiptap/react'
 import { WebsocketProvider } from 'y-websocket'
 import * as Y from 'yjs'
 import { getDoc, getNetwork } from '../api'
+import { exportDocument } from '../exportDocument'
+import type { PMNode } from '../history'
 import type { DocMeta, NetworkInfo, PresenceUser, UserInfo } from '../types'
 import {
   chooseBase,
@@ -62,6 +64,8 @@ export default function DocPage({ docId, onBack }: Props) {
   const [editor, setEditor] = useState<Editor | null>(null)
   const [showShare, setShowShare] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState('')
   const [toast, setToast] = useState('')
   const [lightbox, setLightbox] = useState('')
 
@@ -221,6 +225,29 @@ export default function DocPage({ docId, onBack }: Props) {
     void uploadRef.current(files)
   }
 
+  const handleExport = async () => {
+    if (!editor) {
+      notify('编辑器还没准备好，请稍后重试')
+      return
+    }
+    if (exporting) return
+    setExporting(true)
+    setExportProgress('')
+    try {
+      await exportDocument({
+        title: title || '未命名文档',
+        json: editor.getJSON() as unknown as PMNode,
+        onProgress: (done, total) => setExportProgress(total ? `${done}/${total}` : ''),
+      })
+      notify('已导出 ZIP 压缩包')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '导出失败')
+    } finally {
+      setExporting(false)
+      setExportProgress('')
+    }
+  }
+
   const shareBase = meta?.url
     ? meta.url.replace(/\/d\/[0-9a-z]{12}$/, '')
     : chooseBase(network)
@@ -273,6 +300,15 @@ export default function DocPage({ docId, onBack }: Props) {
             disabled={!editor || !synced}
           >
             历史
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void handleExport()}
+            disabled={!editor || exporting}
+            title="导出为 ZIP（Markdown + 图片/附件）"
+          >
+            {exporting ? (exportProgress ? `导出 ${exportProgress}` : '导出中…') : '导出'}
           </button>
           <button type="button" className="btn btn-primary" onClick={() => setShowShare(true)}>
             分享
